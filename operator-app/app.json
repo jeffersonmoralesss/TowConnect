@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Tow Connect Operator",
+    "slug": "tow-connect-operator",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "org.towconnect.operator"
+    },
+    "android": {
+      "package": "org.towconnect.operator",
+      "adaptiveIcon": {
+        "backgroundColor": "#F5A300",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Tow Connect shows nearby drivers your truck's approximate area while you are switched to Available.",
+          "locationAlwaysAndWhenInUsePermission": "Tow Connect keeps showing nearby drivers your truck's approximate area while you are Available, even when you switch to another app like Google Maps.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isIosBackgroundLocationEnabled": true
+        }
+      ],
+      "expo-sqlite"
+    ]
+  }
+}

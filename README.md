@@ -11,11 +11,12 @@ The requirements live in the SRS doc. This repo holds the code. IDs like FR-D3 o
 3. [How the whole system fits together](#how-the-whole-system-fits-together)
 4. [The database, explained](#the-database-explained)
 5. [The driver app, explained](#the-driver-app-explained)
-6. [The tests, explained](#the-tests-explained)
-7. [Why these choices](#why-these-choices)
-8. [Concepts to know](#concepts-to-know)
-9. [Next steps](#next-steps)
-10. [Change log](#change-log)
+6. [The operator app, explained](#the-operator-app-explained)
+7. [The tests, explained](#the-tests-explained)
+8. [Why these choices](#why-these-choices)
+9. [Concepts to know](#concepts-to-know)
+10. [Next steps](#next-steps)
+11. [Change log](#change-log)
 
 ---
 
@@ -25,7 +26,7 @@ The requirements live in the SRS doc. This repo holds the code. IDs like FR-D3 o
 | --- | --- | --- |
 | `supabase/` | Database schema, security rules, demo data and security tests | Ready |
 | `driver-web/` | Driver web app (PWA): check-in, map, operator profiles, call, report | Ready (MVP) |
-| `operator-app/` | Operator Android app (React Native + Expo) | Next |
+| `operator-app/` | Operator app (React Native + Expo): sign-up, documents, Available switch, location sharing | Ready (MVP) |
 | `admin/` | Admin panel for approving operators and handling reports | Next |
 
 ---
@@ -44,24 +45,37 @@ npm run dev
 
 Open the address it prints (usually http://localhost:5173). On your phone, use the `Network:` address it prints, on the same Wi-Fi.
 
-### The database security tests
+### The tests
 
 ```bash
-cd supabase/tests
+cd supabase/tests        # database security rules
 npm install
-npm test
-```
+npm test                 # expect: 32 passed, 0 failed
 
-You should see `30 passed, 0 failed`.
+cd ../../operator-app    # operator app logic (no phone needed)
+npm install
+npm test                 # expect: pass 18, fail 0
+```
 
 ### Connect the real backend (free)
 
 1. Create a free project at [supabase.com](https://supabase.com).
 2. In the project's **SQL Editor**, run `supabase/migrations/20261020000000_init.sql`.
 3. Optional, for testing: run `supabase/seed.sql` to load the six demo operators.
-4. In **Project Settings → API**, copy the project URL and the `anon` public key.
-5. In `driver-web/`, copy `.env.example` to `.env` and paste both values.
+4. In **Settings → API Keys** (or the project's **Connect** button), copy the project URL and the **publishable** key (starts with `sb_publishable_`). The older `anon` key also works, but Supabase plans to retire it by the end of 2026. **Never** use the secret or `service_role` key in an app.
+5. In `driver-web/`, copy `.env.example` to `.env` and paste both values. Do the same in `operator-app/`. (The variables are still named `..._ANON_KEY` because the publishable key acts as the database's `anon` role.)
 6. Restart `npm run dev`. The "Demo data" label disappears and the app reads live data.
+7. For development, turn off email confirmation so test sign-ups work instantly: **Authentication → Sign In / Providers → Email → Confirm email** off. Turn it back on before launch.
+
+**Approve a test operator** (until the admin panel exists), in the SQL Editor, with the company name you signed up with:
+
+```sql
+update public.operators set status = 'approved' where company_name = 'Your Test Towing';
+update public.operator_documents set verified = true
+where operator_id = (select id from public.operators where company_name = 'Your Test Towing');
+```
+
+This works from the SQL Editor because it runs as the project owner; the database triggers block the same change from the app.
 
 To make yourself an admin, sign up once (later, through the admin panel), then run in the SQL Editor:
 
@@ -71,6 +85,41 @@ select id, email from auth.users where email = 'you@example.com';
 ```
 
 **Before going public:** delete the demo operators with `delete from public.operators where is_demo;`
+
+### The operator app (needs the backend above)
+
+Background location, the core feature, doesn't run in the free Expo Go app. It needs a **development build**: your own copy of the app with the native location code compiled in. Without an Android phone, you run it in the free Android emulator on your Mac.
+
+**One-time setup on a Mac** (from [Expo's emulator guide](https://docs.expo.dev/workflow/android-studio-emulator/)):
+
+1. Install Java 17: `brew install --cask zulu@17` (needs [Homebrew](https://brew.sh)).
+2. Install [Android Studio](https://developer.android.com/studio), choose the **Standard** setup, and accept the licenses.
+3. In Android Studio: **Settings → Languages & Frameworks → Android SDK**. On **SDK Platforms**, under Android 16 (Baklava), check **Android SDK Platform 36**. On **SDK Tools**, check **Android SDK Build-Tools** and **Android Emulator**. Apply.
+4. Add these lines to `~/.zshrc`, then open a new terminal:
+   ```bash
+   export JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
+   export ANDROID_HOME=$HOME/Library/Android/sdk
+   export PATH=$PATH:$ANDROID_HOME/emulator
+   export PATH=$PATH:$ANDROID_HOME/platform-tools
+   ```
+   Check with `adb --version`.
+5. In Android Studio: **More Actions → Virtual Device Manager → Create virtual device**, pick a recent Pixel, download a system image, **Finish**, then press Play to start it.
+
+**Run it:**
+
+```bash
+cd operator-app
+npm install
+npm run android      # builds the development build and installs it on the running emulator
+```
+
+The first build takes several minutes; later ones are much faster. After that, `npm start` is enough while you edit JavaScript.
+
+**Give the emulator a DC location:** in the emulator's side toolbar, click **⋯ (Extended controls) → Location**, search for an address in DC (or enter 38.9335, -76.9973), and click **Set location**. The **Routes** tab can even simulate a truck driving between two points.
+
+**The end-to-end test:** sign up in the operator app, fill in the company, add a truck, upload any PDF or image as the license and insurance, approve yourself with the SQL above, reopen the app, tap **Go Available**, and choose **Allow all the time**. Then open the driver app (connected to the same Supabase project) and your test truck appears near the location you set.
+
+**Quick test on an iPhone, if you have one:** install **Expo Go** from the App Store, run `npm start` in `operator-app`, and scan the QR code with the Camera app. Everything works except background sharing: location is sent only while the app is on screen, and the app tells you so.
 
 ### Save your work to GitHub
 
@@ -87,6 +136,7 @@ What stays out of Git, and why (see `.gitignore`):
 
 - `node_modules/`: hundreds of MB of downloaded packages. Anyone can recreate it with `npm install`, because `package.json` and `package-lock.json` record the exact versions.
 - `dist/`: the built app. Vercel builds its own copy from the source, so committing it would only cause conflicts.
+- `operator-app/android/` and `operator-app/ios/`: generated by `npm run android` / `npm run ios` from `app.json`. Expo recreates them whenever needed, so the settings in `app.json` are the source of truth.
 - `.env`: your Supabase keys. Even though the anon key is public by design, keeping secrets out of Git is a habit worth having from day one; a service-role key in Git would be a real leak.
 
 ### Deploy the driver app (free)
@@ -97,7 +147,7 @@ Push this repo to GitHub, import it in [Vercel](https://vercel.com), set the roo
 
 ## How the whole system fits together
 
-There are three apps and one backend. Only the driver app exists so far.
+There are three apps and one backend. The driver app and operator app exist; the admin panel is next.
 
 ```
  Driver's phone                 Supabase (free tier)                 Operator's phone
@@ -354,7 +404,129 @@ The **manifest** lets someone add Tow Connect to their home screen like an app. 
 
 ---
 
+## The operator app, explained
+
+Built with **Expo**, a toolkit on top of **React Native**. React Native uses the same React ideas as the driver app (components, state, effects), but draws real phone controls instead of HTML. Folder: `operator-app/`.
+
+```
+operator-app/
+├── index.js              Entry point. Defines the background task FIRST, then starts the app
+├── App.js                Picks which screen to show from the sign-in and the operator row
+├── app.json              App name, IDs, and the location permission settings
+├── .env.example          Where the Supabase URL and key go
+├── src/
+│   ├── theme.js              Colors and touch-target size (same palette as the driver app)
+│   ├── components/
+│   │   ├── ui.js                 Shared building blocks: Screen, Button, Field, Banner…
+│   │   ├── TrucksSection.js      Add and remove trucks
+│   │   └── DocumentsSection.js   Upload license and insurance, with expiry dates
+│   ├── screens/
+│   │   ├── AuthScreen.js         Sign in / create account
+│   │   ├── ProfileForm.js        Company, phone, license, services, rates
+│   │   ├── SetupScreen.js        Checklist, then "waiting for approval"
+│   │   ├── HomeScreen.js         The Available switch
+│   │   └── SuspendedScreen.js    Shown if an admin pauses the account
+│   ├── lib/
+│   │   ├── supabase.js           The Supabase client and where the login is saved
+│   │   ├── api.js                Every database and storage call
+│   │   ├── useOperatorData.js    Loads trucks and documents (a custom hook)
+│   │   ├── documents.js          Rules for "verified / in review / expiring / expired"
+│   │   ├── validate.js           Form checks that mirror the database's rules
+│   │   └── dates.js              Date formatting without time-zone surprises
+│   └── location/
+│       ├── task.js               The background task the phone wakes up
+│       ├── tracking.js           Start and stop sharing; background vs foreground mode
+│       ├── report.js             Sends one position, remembering what was sent
+│       └── throttle.js           Decides which GPS fixes are worth sending
+└── tests/                    Tests for throttle, documents, validate and dates
+```
+
+### `App.js`: which screen, decided by data
+
+The app shows exactly one screen, chosen from two facts: **who is signed in** (`session`) and **their operator row** (`operator`).
+
+```
+not signed in ──▶ AuthScreen
+signed in, no operator row ──▶ ProfileForm ──save──▶ SetupScreen (status 'pending')
+                                                        │ admin approves
+                                                        ▼
+                                                     HomeScreen (status 'approved') ◀─▶ ProfileForm (edit)
+                                       admin suspends ──▶ SuspendedScreen
+```
+
+- `supabase.auth.onAuthStateChange` fires at startup with the saved login, and again on every sign-in and sign-out, so the screen always matches reality.
+- Every time the app comes back to the screen (`AppState` becomes `active`), it reloads the operator row. That's how an approval shows up without signing out and back in.
+- **Why no navigation library:** with five screens chosen by data, a navigator would add a dependency and a way to get "back" to a screen that no longer makes sense (like the sign-up form after approval). The driver app uses the same pattern.
+
+### `lib/supabase.js`: staying signed in
+
+Creates the Supabase client with `expo-sqlite/localStorage` as storage, which is what Expo's current Supabase guide uses. The login session is saved in a tiny database on the phone, so operators stay signed in. The token refresh timer runs only while the app is on screen; when a background request needs a fresh token, supabase-js refreshes it just before sending.
+
+### `lib/api.js`: everything the app reads and writes
+
+One file lists every call: get or save the operator row, switch Available, add or remove trucks, upload documents, and send a position. Some details worth knowing:
+
+- `unwrap()` turns Supabase's `{ data, error }` replies into "return data or throw", so screens can use plain `try/catch`.
+- `setAvailable()` returns **what the database actually stored**. If the operator isn't approved, the database trigger forces `false` and the app finds out from the reply. The app never assumes it was allowed.
+- `uploadDocument()` reads the picked file as raw bytes and uploads it to `operator-docs/<user id>/...`, the only folder the storage rules allow. Then it adds a **new** `operator_documents` row instead of replacing the old one. That way an operator renewing their insurance stays on the map under the old, still-valid record while an admin checks the new one.
+- `sendPosition()` uses **upsert** (insert the first time, update after) because `operator_positions` holds exactly one row per operator.
+
+### `lib/validate.js` and `lib/documents.js`: rules as plain functions
+
+- `validate.js` mirrors the database's own checks (the same phone pattern, the same length limits), so the operator sees "Use digits only" next to the right field instead of a raw database error. The database still enforces them; this just explains them sooner.
+- `documents.js` decides what to show for each document, using the **same rule as the database**: a document counts only when it is verified and not past its expiry date. It also flags documents expiring within 30 days, so operators renew before they vanish.
+- Neither file uses React or the network, which is why they can be tested on your computer with no phone (`npm test`).
+
+### Screens
+
+- **`AuthScreen`**: email and password. The SRS allowed phone or email sign-in; phone sign-in sends text messages, which cost money per message, and the project has to stay free.
+- **`ProfileForm`**: one form for creating and editing. One `form` state object holds all the fields, and `set('phone')` makes a change handler for any field. After approval the license field is locked and the app doesn't even send it, because the database would ignore the change anyway (an admin verified that exact number).
+- **`SetupScreen`**: a three-step checklist (company, a truck, both documents uploaded), then "Waiting for approval" with a **Check approval status** button.
+- **`HomeScreen`**: one big **Go Available / Go offline** button, the time the location was last sent, warnings about weak signal, foreground-only mode or expiring documents, and a preview of what drivers see.
+- **`SuspendedScreen`**: explains that a reviewer paused the account.
+
+### Location sharing: the most important part
+
+This is the feature that needs a native app, so it's worth understanding step by step.
+
+**Going Available** (`HomeScreen` → `tracking.startSharing()`):
+
+1. Check that location is on, then ask for **foreground** permission. Expo's docs say to get this before asking for background permission.
+2. Remember the operator ID, get one position right away and send it, so the truck appears without waiting.
+3. Ask for **background** permission ("Allow all the time"). If granted, start the background task with an Android **foreground service**: the permanent notification Android requires for any app using location in the background. It also reminds the operator they're live.
+4. If background permission is refused, or the app is running in Expo Go, fall back to **foreground mode**: location is shared only while the app is open, and the screen says so.
+5. Only **after** location works does the app tell the database `is_available = true`. A truck should never be listed without a position.
+
+**Going offline** does the reverse in the opposite order: stop sending first, then switch Available off, so no position is sent after the operator goes offline.
+
+**Why the task is defined in `index.js`:** when Android wakes the app just to deliver a location, it runs the app's code without showing any screen. If the task were defined inside a screen, it wouldn't exist yet and the location would be lost. Expo requires it at the top level.
+
+**Why `report.js` uses `localStorage` instead of variables:** a background wake-up can start a fresh copy of the JavaScript with empty variables. The operator ID and the last position sent are saved on the phone so the task still knows who it's reporting for.
+
+**How often positions are sent** (`throttle.js`, all covered by tests):
+
+| Rule | Why |
+| --- | --- |
+| Always send the first fix | The truck appears immediately |
+| Send at least once a minute, even when parked | A parked truck waiting for calls is the common case, and the database hides positions older than 10 minutes |
+| Send early after moving 150 m, but at most every 15 s | A moving truck stays roughly accurate without draining the battery |
+| Skip fixes less accurate than 250 m, unless nothing was sent for 2 minutes | One bad reading shouldn't jump the truck across town |
+
+**Why "Balanced" accuracy instead of GPS-level "High":** drivers only ever see a position rounded to about half a mile, so pinpoint GPS would cost battery and buy nothing.
+
+**When the app reopens:** if the database says the operator is Available but nothing is sharing (for example, the phone restarted), the home screen restarts sharing so the switch tells the truth. If it can't, the operator sees the error and can go offline.
+
+### `app.json`: the permission settings
+
+The `expo-location` plugin turns on Android's background location and foreground-service permissions and sets the text people see in the permission prompts. That text says plainly what's shared and when, which is also what Google Play reviews when an app asks for background location.
+
+---
+
 ## The tests, explained
+
+There are two test suites: the database rules, and the operator app's logic.
+
+### Database security tests
 
 File: `supabase/tests/security.test.mjs`.
 
@@ -364,14 +536,23 @@ It uses **PGlite**, real Postgres compiled to run inside Node.js, so it needs no
 2. Runs the real migration and seed files, unchanged.
 3. Pretends to be different people by switching roles (`set role anon`) and setting who `auth.uid()` returns, then checks what each person can and can't do.
 
-What the 30 checks cover:
+What the 32 checks cover:
 
 - **The public:** sees exactly the 6 demo operators near DC, positions are rounded, sorted by distance, nobody shows up from New York, can't read any table, can't run housekeeping, can file a report but can't read reports.
 - **An operator signing up:** is forced to `pending`, can't approve themselves, can't go Available while pending, can't verify their own documents, and is invisible to other users.
-- **After admin approval:** appears on the map at the rounded position, and each position update leaves exactly one history row.
+- **After admin approval:** appears on the map at the rounded position, each position update leaves exactly one history row, can still change their phone number, but can't change their license number.
 - **Automatic removal:** expired insurance hides them, a position older than 10 minutes hides them, housekeeping switches stale operators off, and a suspended operator can't switch back on.
 - **Re-uploading a document** resets its verification.
 - **Storage:** an operator can upload to their own folder but not someone else's.
+
+### Operator app logic tests
+
+Folder: `operator-app/tests/`. Run with `npm test` in `operator-app`. They use Node's built-in test runner (`node --test`), so there's nothing extra to install.
+
+- **`throttle.test.mjs`** (7 tests): first fix is sent, a parked truck checks in every minute, moving 150 m sends early but not more than every 15 s, small moves wait, rough fixes are skipped, and late-arriving old fixes are ignored.
+- **`documents.test.mjs`** (11 tests): missing, in review, verified, expiring and expired documents; a renewal in review keeps the old record in effect; expiry dates like 2027-02-31 or yesterday are rejected; the phone check uses exactly the database's pattern; money and date formatting.
+
+These cover the parts of the app that are pure logic. The screens and the real background location need a phone or emulator; the app was also checked by building a full Android bundle and generating the Android project to confirm the background location permissions are in it.
 
 **Why test the database and not the screens first:** a bug in the screens is visible and annoying; a bug in the security rules is invisible and dangerous (leaked locations, self-approved operators). The screens were checked by clicking through every flow in a headless browser.
 
@@ -382,7 +563,13 @@ What the 30 checks cover:
 | Decision | What we chose | Alternatives considered | Why this one |
 | --- | --- | --- | --- |
 | Driver app type | Web app (PWA) | Native iOS/Android app | Someone on the shoulder won't download an app. A link opens instantly on any phone, and there's no app store fee or review. |
-| Operator app type | Native app with Expo (next) | Web app | Operators must keep sharing location while Google Maps is open in front. Web apps stop getting GPS when they're in the background; native apps don't. |
+| Operator app type | Native app with Expo | Web app | Operators must keep sharing location while Google Maps is open in front. Web apps stop getting GPS when they're in the background; native apps don't. |
+| How to run it while developing | Development build in the Android emulator | Expo Go | Expo Go can't run background location. A development build can, and the emulator is free and can fake a GPS route. Expo Go still works for quick foreground-only tests. |
+| Operator sign-in | Email and password | Phone number with a texted code | Texted codes cost money per message; email sign-in is free. |
+| When location permission is "only while using" | Keep working in foreground mode and say so | Refuse to go Available | Expo's docs say apps must always be ready for foreground-only permission, and a partly working app is better than none. |
+| GPS accuracy | Balanced (about 100 m) | High (GPS) | Drivers only see positions rounded to about half a mile, so extra precision only costs battery. |
+| How often to send | First fix, every minute, sooner after 150 m | Every fix, or only on movement | Every fix wastes battery and free-tier requests; movement-only makes a parked truck disappear after 10 minutes. |
+| Renewing a document | Add a new record | Replace the old one | Replacing would hide the operator until an admin checked the new copy. Adding keeps the old, still-valid one in effect meanwhile. |
 | Backend | Supabase | Firebase, a custom server | Free tier fits; real Postgres means real SQL, triggers and RLS. Firebase's free limit of 20,000 writes a day is too tight for location updates, and a custom server means hosting and patching something ourselves. |
 | Where rules live | In the database (RLS, triggers, RPCs) | In app code | Rules in the database protect every client, including ones we didn't write. Rules in app code protect only that app. |
 | Hiding exact positions | Round inside the database | Round in the driver app | If the app rounded them, the exact numbers would still arrive on the driver's phone and anyone could read them in the browser's network tab. |
@@ -413,6 +600,14 @@ Short definitions for explaining the project to someone else.
 - **RPC:** calling a database function by name from the app.
 - **`SECURITY DEFINER`:** a function that runs with its creator's permissions, used to hand out exactly the safe data and nothing more.
 - **Haversine formula:** the standard way to compute distance between two latitude/longitude points on a sphere.
+- **React Native:** React for phone apps. Same components and hooks, but `<View>` and `<Text>` become real phone controls instead of HTML.
+- **Expo:** tools and ready-made modules (location, file picking, storage) on top of React Native, so you write JavaScript instead of Java or Swift.
+- **Expo Go vs development build:** Expo Go is a ready-made app from the store that can run your JavaScript, but only with the native modules it already includes. A development build is your own app with exactly the native code your project needs, such as background location.
+- **Custom hook:** a function starting with `use` that bundles state and effects for reuse, like `useOperatorData` loading trucks and documents for two screens.
+- **Background task:** code the phone runs when the app isn't on screen, here to deliver new locations.
+- **Foreground service:** Android's rule that an app using location in the background must show a permanent notification, so people always know.
+- **Upsert:** insert a row if it doesn't exist, update it if it does.
+- **Environment variable (`EXPO_PUBLIC_…`, `VITE_…`):** a setting kept outside the code (in `.env`). The prefix tells the build tool it's safe to put into the app.
 
 ---
 
@@ -420,10 +615,10 @@ Short definitions for explaining the project to someone else.
 
 In order, with the reason for the order:
 
-1. **Put the project on GitHub.** Free version history and a backup, and Vercel deploys from it.
-2. **Create the Supabase project and connect the driver app.** Proves the real backend works end to end before we build on it.
-3. **Build the operator app** (Expo, Android first). Without operators the map is empty, so this unblocks everything else. Testing needs an Android phone with the free Expo Go app.
-4. **Build the admin panel.** Needed to approve the first real operators.
+1. ~~Put the project on GitHub.~~ Done.
+2. **Create the Supabase project** and connect both apps (see "Connect the real backend"). Everything from here needs it.
+3. **Set up the Android emulator and run the end-to-end test** (see "The operator app"): an operator goes Available and appears in the driver app.
+4. **Build the admin panel.** Replaces the SQL snippets for approving operators and handling reports.
 5. **Open the Google Play developer account early** ($25 once). New personal accounts must run a closed test with 12 testers for 14 straight days before publishing, so starting the clock early saves two weeks at the end.
 6. **Legal checks:** take the terms, privacy policy and accident flow to a free legal clinic, and ask MPD or DLCP how they treat driver-chosen tows in DC.
 7. **Recruit 10 to 20 DC operators,** who can also be the 12 Play Store testers.
@@ -434,6 +629,14 @@ In order, with the reason for the order:
 ## Change log
 
 Every change gets an entry here: what changed, how it works, and why it was done that way. Newest first.
+
+### 2026-10-22: Operator app (MVP)
+
+- **What changed:** Built the operator app in `operator-app/`: sign-in, company and rates, trucks, document upload with expiry dates, waiting for approval, the Available switch, and background location sharing. Added 18 logic tests in `operator-app/tests/` and 2 database tests (approved operators can edit their phone but not their license number). Updated the setup steps (publishable key, email confirmation, emulator) in this README.
+- **How it works:** See "The operator app, explained." In short: the screen is chosen from the sign-in and the operator row; going Available asks for permissions, sends a first position, starts a background task (or a foreground watcher), and only then sets `is_available`; every position goes through one throttle that sends at least once a minute.
+- **Why:** Without operators the driver map is empty, so this app unblocks everything else. It was created from Expo's official blank template and its packages were installed with `npx expo install`, which picks versions that match Expo SDK 58. It follows Expo's current docs: `expo-sqlite/localStorage` for the login session and a development build for background location.
+- **How it was checked:** the logic tests pass, the full Android bundle builds (733 modules), and generating the Android project confirmed the background location and foreground-service permissions are in the manifest. Running it on a device or emulator still needs your Supabase project.
+- **Not done yet:** truck photos (part of FR-O2) and the iPhone version. The template's placeholder app icons are still in `assets/`.
 
 ### 2026-10-22: Add the Git workflow to the README
 

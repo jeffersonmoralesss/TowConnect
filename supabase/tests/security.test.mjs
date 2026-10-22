@@ -87,6 +87,12 @@ await as('authenticated', u1, `insert into public.operator_positions (operator_i
 const near2 = await as('anon', null, `select * from public.nearby_operators(38.93, -76.99)`)
 const mine = near2.rows.find(r => r.id === me.id)
 ok(!!mine, 'approved, verified, available operator appears for drivers')
+
+// After approval the operator app can still edit the phone, but the license number is locked
+await as('authenticated', u1, `update public.operators set phone = '(202) 555-0199', license_number = 'FAKE-123' where id = $1`, [me.id])
+row = (await db.query(`select phone, license_number from public.operators where id = $1`, [me.id])).rows[0]
+ok(row.phone === '(202) 555-0199', 'approved operator can update their phone number')
+ok(row.license_number === 'DC-TOW-9', 'approved operator cannot change their license number')
 ok(mine && mine.approx_lat === 38.93 && mine.approx_lng === -76.99, `exact position hidden (shown ${mine?.approx_lat}, ${mine?.approx_lng})`)
 const pings = await db.query(`select count(*)::int n from public.location_pings where operator_id = $1`, [me.id])
 ok(pings.rows[0].n === 1, 'position update leaves one history ping')
