@@ -1,0 +1,12 @@
+{
+  "name": "Tow Connect",
+  "short_name": "Tow Connect",
+  "description": "Find a licensed tow truck nearby and call them directly.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F3F5F7",
+  "theme_color": "#F5A300",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
