@@ -1,10 +1,13 @@
-# Admin panel (next)
+# Admin panel
 
-A small React page, hosted with the driver app on Vercel. Admins sign in with Supabase Auth; the `admins` table decides who is an admin.
+Review and approve tow operators, handle driver reports, review the company directory, and manage admins.
 
-## Planned screens (MVP)
+- **Set it up and run it:** see "The admin panel" under "Run it" in the main [README](../README.md).
+- **How it works and why:** see "The admin panel, explained" in the main README.
 
-1. **Applications**: pending operators with their documents. Check the license in DC's SCOUT system, then approve or reject (FR-A1). Approving sets `operators.status = 'approved'` and `operator_documents.verified = true`.
-2. **Reports**: open reports, newest first. Add notes, resolve, or suspend the operator (FR-A2). Suspending sets `status = 'suspended'`, which also switches them off the map.
-
-The database rules already let only admins read reports, approve operators and verify documents.
+```bash
+npm install
+cp .env.example .env   # same Supabase URL and publishable key as the other apps
+npm run dev            # http://localhost:5175
+npm test               # pass 19, fail 0
+```
