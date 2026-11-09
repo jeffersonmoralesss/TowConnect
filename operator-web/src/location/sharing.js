@@ -39,10 +39,18 @@ const toFix = (pos) => ({
   timestamp: pos.timestamp || Date.now(),
 })
 
+// Browsers only allow location on secure pages: https:// addresses, or localhost on your own computer.
+// On a plain http:// network address (like http://10.0.0.13:5174 during development) they refuse
+// without even asking, which looks exactly like "the user said no". We check for that first so the
+// message names the real cause.
+export const INSECURE_ADDRESS_MESSAGE =
+  'Location only works on a secure address (one starting with https://). On this computer, open http://localhost:5174 instead. On a phone, use the deployed https:// address.'
+
 // Turns the browser's error codes into instructions an operator can act on.
 export function describeLocationError(err) {
+  if (typeof window !== 'undefined' && window.isSecureContext === false) return INSECURE_ADDRESS_MESSAGE
   if (err?.code === 1) {
-    return 'Location is blocked for Tow Connect. On iPhone: Settings → Privacy & Security → Location Services → Safari Websites → While Using the App. Then try again.'
+    return 'Location is blocked for Tow Connect. On iPhone: Settings → Privacy & Security → Location Services → Safari Websites → While Using the App. On a Mac: System Settings → Privacy & Security → Location Services → turn on your browser. Then try again.'
   }
   if (err?.code === 3) return 'Getting your location took too long. Step outside or near a window and try again.'
   return 'Your location is unavailable right now. Check that Location Services are on and try again.'
@@ -50,6 +58,10 @@ export function describeLocationError(err) {
 
 function getOnce() {
   return new Promise((resolve, reject) => {
+    if (window.isSecureContext === false) {
+      reject(new Error(INSECURE_ADDRESS_MESSAGE))
+      return
+    }
     if (!('geolocation' in navigator)) {
       reject(new Error('This browser cannot share location.'))
       return
