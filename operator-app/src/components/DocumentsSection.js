@@ -46,8 +46,9 @@ function DocumentCard({ kind, operatorId, userId, documents, onChanged }) {
     });
     if (result.canceled) return;
     const asset = result.assets[0];
-    if (asset.size && asset.size > 10 * 1024 * 1024) {
-      setError('That file is over 10 MB. Try a photo or a smaller PDF.');
+    // 5 MB keeps us well inside Supabase's free 1 GB of file storage.
+    if (asset.size && asset.size > 5 * 1024 * 1024) {
+      setError('That file is over 5 MB. Try a photo or a smaller PDF.');
       return;
     }
     setFile(asset);

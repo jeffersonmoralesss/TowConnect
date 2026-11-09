@@ -1,7 +1,7 @@
 // Runs the migration and seed in an in-memory Postgres with stand-ins for Supabase auth and storage,
 // then checks the security rules. Usage: npm install && npm test
 import { PGlite } from '@electric-sql/pglite'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 
 const root = new URL('../..', import.meta.url).pathname
 const db = new PGlite()
@@ -22,7 +22,11 @@ await db.exec(`
   grant execute on all functions in schema auth to anon, authenticated;
 `)
 
-try { await db.exec(readFileSync(`${root}/supabase/migrations/20261020000000_init.sql`, "utf8")) } catch (e) { console.log("MIGRATION ERROR:", e.message, e.position); process.exit(1) }
+// Run every migration in filename order, the same order Supabase applies them in.
+const migrations = readdirSync(`${root}/supabase/migrations`).filter((f) => f.endsWith('.sql')).sort()
+for (const file of migrations) {
+  try { await db.exec(readFileSync(`${root}/supabase/migrations/${file}`, 'utf8')) } catch (e) { console.log(`MIGRATION ERROR in ${file}:`, e.message, e.position); process.exit(1) }
+}
 // Supabase's default grants (RLS does the real protection)
 await db.exec(`
   grant select, insert, update, delete on all tables in schema public to authenticated, service_role;
@@ -111,13 +115,20 @@ ok(row.verified === false, 'changing a document file resets verification')
 // Stale position + housekeeping
 await db.query(`update public.operator_documents set verified = true where operator_id = $1`, [me.id])
 await db.query(`alter table public.operator_positions disable trigger positions_touch`)
+await db.query(`update public.operator_positions set updated_at = now() - interval '20 minutes' where operator_id = $1`, [me.id])
+const near20 = await as('anon', null, `select * from public.nearby_operators(38.93, -76.99)`)
+ok(!!near20.rows.find(r => r.id === me.id), 'a 20-minute-old position still shows (30-minute window)')
 await db.query(`update public.operator_positions set updated_at = now() - interval '45 minutes' where operator_id = $1`, [me.id])
-await db.query(`alter table public.operator_positions enable trigger positions_touch`)
 const near4 = await as('anon', null, `select * from public.nearby_operators(38.93, -76.99)`)
 ok(!near4.rows.find(r => r.id === me.id), 'stale position (45 min) hides the operator')
-const expired = (await db.query(`select public.expire_stale_availability() n`)).rows[0].n
+let expired = (await db.query(`select public.expire_stale_availability() n`)).rows[0].n
+ok(expired === 0, 'hidden but still Available after 45 min, so a check-in can bring them back')
+await db.query(`update public.operator_positions set updated_at = now() - interval '4 hours' where operator_id = $1`, [me.id])
+await db.query(`alter table public.operator_positions enable trigger positions_touch`)
+await db.query(`update public.operators set available_since = now() - interval '4 hours' where id = $1`, [me.id])
+expired = (await db.query(`select public.expire_stale_availability() n`)).rows[0].n
 row = (await db.query(`select is_available from public.operators where id = $1`, [me.id])).rows[0]
-ok(expired === 1 && row.is_available === false, 'housekeeping switches stale operator off (demo rows untouched)')
+ok(expired === 1 && row.is_available === false, 'housekeeping switches an operator off after 3 hours with no position (demo rows untouched)')
 
 // Suspension
 await as('authenticated', u2, `update public.operators set status = 'suspended' where id = $1`, [me.id])
@@ -135,6 +146,57 @@ ok(reps1.rows.length === 0, 'operator cannot read reports')
 const okUpload = !(await fails(() => as('authenticated', u1, `insert into storage.objects (bucket_id, name) values ('operator-docs', '${u1}/license.pdf')`)))
 ok(okUpload, 'operator can upload into their own folder')
 ok(await fails(() => as('authenticated', u1, `insert into storage.objects (bucket_id, name) values ('operator-docs', '${u2}/license.pdf')`)), 'operator cannot upload into someone else\'s folder')
+
+// ---------- iPhone check-in (migration 20261109) ----------
+const u3 = '33333333-3333-3333-3333-333333333333'
+const u4 = '44444444-4444-4444-4444-444444444444'
+await db.query(`insert into auth.users values ($1, 'dad@example.com'), ($2, 'other@example.com')`, [u3, u4])
+const op3 = (await as('authenticated', u3, `insert into public.operators (company_name, phone, license_number)
+  values ('Dad Towing', '(202) 555-0111', 'DC-TOW-33') returning id`)).rows[0].id
+await db.query(`update public.operators set status = 'approved' where id = $1`, [op3])
+await db.query(`insert into public.operator_documents (operator_id, kind, verified, expires_on) values ($1, 'tow_license', true, current_date + 90), ($1, 'insurance', true, current_date + 90)`, [op3])
+
+ok(await fails(() => as('anon', null, `select public.create_checkin_code()`)), 'the public key cannot make check-in codes')
+const code = (await as('authenticated', u3, `select public.create_checkin_code() as c`)).rows[0].c
+ok(/^[0-9a-f]{64}$/.test(code), 'a check-in code is 64 random hex characters')
+const stored = (await db.query(`select encode(code_hash, 'hex') h from public.operator_checkin_codes where operator_id = $1`, [op3])).rows[0].h
+ok(stored !== code && stored.length === 64, 'only a hash of the code is stored, never the code')
+ok(await fails(() => as('anon', null, `select * from public.operator_checkin_codes`)), 'the public key cannot read check-in codes')
+const otherView = await as('authenticated', u4, `select * from public.operator_checkin_codes`)
+ok(otherView.rows.length === 0, 'another user cannot see someone else\'s check-in code row')
+
+const checkin = async (c, lat = 38.9333, lng = -76.9971) =>
+  (await as('anon', null, `select public.checkin($1, $2, $3) as r`, [c, lat, lng])).rows[0].r
+let r = await checkin('0'.repeat(64))
+ok(r.ok === false && /not recognized/.test(r.message), 'a wrong code is rejected without revealing anything')
+r = await checkin(code)
+ok(r.ok === false && /offline/.test(r.message), 'check-in while offline is refused: going Available stays a choice in the app')
+await as('authenticated', u3, `update public.operators set is_available = true where id = $1`, [op3])
+r = await checkin(code)
+ok(r.ok === true, 'check-in works with the right code while Available')
+let near5 = await as('anon', null, `select * from public.nearby_operators(38.93, -76.99)`)
+ok(!!near5.rows.find(x => x.id === op3), 'after a check-in, the operator appears for drivers')
+const pingCount = async () => (await db.query(`select count(*)::int n from public.location_pings where operator_id = $1`, [op3])).rows[0].n
+const before = await pingCount()
+r = await checkin(code, 38.95, -77.01)
+ok(r.ok === true && (await pingCount()) === before, 'a second check-in within 15 seconds is accepted but not written twice')
+r = await checkin(code, 123, -77)
+ok(r.ok === false && /location/.test(r.message), 'an impossible location is rejected')
+const used = (await db.query(`select last_used_at from public.operator_checkin_codes where operator_id = $1`, [op3])).rows[0].last_used_at
+ok(used !== null, 'the code records when it was last used')
+
+const code2 = (await as('authenticated', u3, `select public.create_checkin_code() as c`)).rows[0].c
+r = await checkin(code)
+ok(code2 !== code && r.ok === false, 'making a new code cancels the old one')
+await as('authenticated', u4, `select public.delete_checkin_code()`)
+ok((await db.query(`select count(*)::int n from public.operator_checkin_codes where operator_id = $1`, [op3])).rows[0].n === 1, 'another user cannot delete someone else\'s code')
+await as('authenticated', u3, `select public.delete_checkin_code()`)
+r = await checkin(code2)
+ok(r.ok === false, 'deleting the code turns check-ins off')
+await db.query(`update public.operators set status = 'suspended' where id = $1`, [op3])
+const code3 = (await as('authenticated', u3, `select public.create_checkin_code() as c`)).rows[0].c
+r = await checkin(code3)
+ok(r.ok === false && /approved/.test(r.message), 'a suspended operator cannot check in')
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

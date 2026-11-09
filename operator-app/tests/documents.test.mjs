@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { addDays, formatDate, timeAgo } from '../src/lib/dates.js';
 import { allRequiredUploaded, allRequiredValid, daysUntil, summarize } from '../src/lib/documents.js';
-import { checkExpiryDate, checkPhone, parseMoney, PHONE_PATTERN } from '../src/lib/validate.js';
+import { checkExpiryDate, checkPhone, formatMoney, parseMoney, PHONE_PATTERN } from '../src/lib/validate.js';
 
 const today = new Date(2026, 9, 22); // Oct 22, 2026, local time
 const doc = (kind, expires_on, verified, created_at) => ({ kind, expires_on, verified, created_at });
@@ -71,6 +71,12 @@ test('money parsing', () => {
   assert.deepEqual(parseMoney(''), { value: null, error: null });
   assert.notEqual(parseMoney('4.555').error, null);
   assert.notEqual(parseMoney('-3').error, null);
+});
+
+test('money formatting always shows cents when there are any', () => {
+  assert.equal(formatMoney(95), '$95');
+  assert.equal(formatMoney(4.5), '$4.50');
+  assert.equal(formatMoney('4.50'), '$4.50'); // the database sends numeric values as text
 });
 
 test('dates format without time-zone shifts', () => {

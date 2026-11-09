@@ -28,6 +28,13 @@ export function telHref(phone) {
   return `tel:${phone.replace(/[^\d+]/g, '')}`
 }
 
+// Short age for the list, shown only when a position is more than 5 minutes old (iPhone operators
+// check in at moments, so their pin can be up to 30 minutes old). Fresh pins show nothing extra.
+export function staleLabel(seconds) {
+  if (seconds == null || seconds < 5 * 60) return null
+  return `Location from ${Math.round(seconds / 60)} min ago`
+}
+
 export function freshness(seconds) {
   if (seconds == null) return null
   if (seconds < 90) return 'Location updated just now'

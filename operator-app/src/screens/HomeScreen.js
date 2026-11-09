@@ -8,6 +8,7 @@ import { setAvailable } from '../lib/api';
 import { timeAgo } from '../lib/dates';
 import { allRequiredValid, REQUIRED_KINDS, summarize } from '../lib/documents';
 import { useOperatorData } from '../lib/useOperatorData';
+import { formatMoney } from '../lib/validate';
 import { sharingStatus } from '../location/report';
 import { currentMode, isExpoGo, SharingError, startSharing, stopSharing } from '../location/tracking';
 import { colors } from '../theme';
@@ -146,8 +147,8 @@ export default function HomeScreen({ operator, userId, onOperatorChanged, onEdit
         <Body>{operator.phone}</Body>
         <Body muted>
           {[
-            operator.hookup_fee != null ? `$${Number(operator.hookup_fee)} hookup` : null,
-            operator.per_mile_rate != null ? `$${Number(operator.per_mile_rate)}/mi` : null,
+            operator.hookup_fee != null ? `${formatMoney(operator.hookup_fee)} hookup` : null,
+            operator.per_mile_rate != null ? `${formatMoney(operator.per_mile_rate)}/mi` : null,
           ]
             .filter(Boolean)
             .join(' + ') || 'No rates posted. Drivers trust posted rates more.'}

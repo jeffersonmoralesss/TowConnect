@@ -41,6 +41,12 @@ export function parseMoney(text) {
   return { value: Number(v), error: null };
 }
 
+// The reverse of parseMoney, for showing a saved amount: 95 -> '$95', 4.5 -> '$4.50' (never '$4.5').
+export function formatMoney(value) {
+  const n = Number(value);
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+}
+
 export function checkRateNotes(value) {
   return value.trim().length > 280 ? 'Use 280 characters or fewer.' : null;
 }

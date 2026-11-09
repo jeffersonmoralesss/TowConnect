@@ -12,11 +12,12 @@ The requirements live in the SRS doc. This repo holds the code. IDs like FR-D3 o
 4. [The database, explained](#the-database-explained)
 5. [The driver app, explained](#the-driver-app-explained)
 6. [The operator app, explained](#the-operator-app-explained)
-7. [The tests, explained](#the-tests-explained)
-8. [Why these choices](#why-these-choices)
-9. [Concepts to know](#concepts-to-know)
-10. [Next steps](#next-steps)
-11. [Change log](#change-log)
+7. [iPhone operators: web app and auto check-in, explained](#iphone-operators-web-app-and-auto-check-in-explained)
+8. [The tests, explained](#the-tests-explained)
+9. [Why these choices](#why-these-choices)
+10. [Concepts to know](#concepts-to-know)
+11. [Next steps](#next-steps)
+12. [Change log](#change-log)
 
 ---
 
@@ -24,9 +25,10 @@ The requirements live in the SRS doc. This repo holds the code. IDs like FR-D3 o
 
 | Folder | What it is | Status |
 | --- | --- | --- |
-| `supabase/` | Database schema, security rules, demo data and security tests | Ready |
+| `supabase/` | Database (two migrations), security rules, demo data and security tests | Ready |
 | `driver-web/` | Driver web app (PWA): check-in, map, operator profiles, call, report | Ready (MVP) |
-| `operator-app/` | Operator app (React Native + Expo): sign-up, documents, Available switch, location sharing | Ready (MVP) |
+| `operator-app/` | Operator app for Android (React Native + Expo): sign-up, documents, Available switch, background location | Ready (MVP) |
+| `operator-web/` | Operator web app for iPhones: the same screens, plus auto check-in through an iPhone shortcut | Ready (MVP) |
 | `admin/` | Admin panel for approving operators and handling reports | Next |
 
 ---
@@ -50,20 +52,24 @@ Open the address it prints (usually http://localhost:5173). On your phone, use t
 ```bash
 cd supabase/tests        # database security rules
 npm install
-npm test                 # expect: 32 passed, 0 failed
+npm test                 # expect: 50 passed, 0 failed
 
 cd ../../operator-app    # operator app logic (no phone needed)
 npm install
-npm test                 # expect: pass 18, fail 0
+npm test                 # expect: pass 19, fail 0
+
+cd ../operator-web       # shared files haven't drifted between the two operator apps
+npm install
+npm test                 # expect: pass 5, fail 0
 ```
 
 ### Connect the real backend (free)
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. In the project's **SQL Editor**, run `supabase/migrations/20261020000000_init.sql`.
+2. In the project's **SQL Editor**, run each file in `supabase/migrations/` **in name order**: first `20261020000000_init.sql`, then `20261109000000_iphone_checkin.sql`. If you already ran the first one, run only the second. Each file runs once.
 3. Optional, for testing: run `supabase/seed.sql` to load the six demo operators.
 4. In **Settings → API Keys** (or the project's **Connect** button), copy the project URL and the **publishable** key (starts with `sb_publishable_`). The older `anon` key also works, but Supabase plans to retire it by the end of 2026. **Never** use the secret or `service_role` key in an app.
-5. In `driver-web/`, copy `.env.example` to `.env` and paste both values. Do the same in `operator-app/`. (The variables are still named `..._ANON_KEY` because the publishable key acts as the database's `anon` role.)
+5. In `driver-web/`, copy `.env.example` to `.env` and paste both values. Do the same in `operator-app/` and `operator-web/`. (The variables are still named `..._ANON_KEY` because the publishable key acts as the database's `anon` role.)
 6. Restart `npm run dev`. The "Demo data" label disappears and the app reads live data.
 7. For development, turn off email confirmation so test sign-ups work instantly: **Authentication → Sign In / Providers → Email → Confirm email** off. Turn it back on before launch.
 
@@ -121,6 +127,18 @@ The first build takes several minutes; later ones are much faster. After that, `
 
 **Quick test on an iPhone, if you have one:** install **Expo Go** from the App Store, run `npm start` in `operator-app`, and scan the QR code with the Camera app. Everything works except background sharing: location is sent only while the app is on screen, and the app tells you so.
 
+### The operator web app, for iPhones (needs the backend above)
+
+```bash
+cd operator-web
+npm install
+npm run dev          # opens on http://localhost:5174, so it can run next to the driver app (5173)
+```
+
+**Try it on an iPhone:** use the `Network:` address it prints, on the same Wi-Fi. Location only works on `https://` addresses or `localhost`, so on a phone the Available button will report that location is blocked until the app is deployed (see "Deploy the web apps"). Everything else (sign-up, documents, approval) works over the network address. On your Mac, `localhost` works fully.
+
+**End-to-end test with your dad:** deploy `operator-web`, have him open it in Safari, add it to his home screen, sign up, and finish the checklist. Approve him with the SQL above, then follow "Build the check-in shortcut" in the iPhone section below and send him the link.
+
 ### Save your work to GitHub
 
 The repo lives at https://github.com/jeffersonmoralesss/TowConnect. The everyday loop after you change something:
@@ -135,19 +153,28 @@ git push                   # upload your commits to GitHub
 What stays out of Git, and why (see `.gitignore`):
 
 - `node_modules/`: hundreds of MB of downloaded packages. Anyone can recreate it with `npm install`, because `package.json` and `package-lock.json` record the exact versions.
-- `dist/`: the built app. Vercel builds its own copy from the source, so committing it would only cause conflicts.
+- `dist/`: the built app. The hosting service builds its own copy from the source, so committing it would only cause conflicts.
 - `operator-app/android/` and `operator-app/ios/`: generated by `npm run android` / `npm run ios` from `app.json`. Expo recreates them whenever needed, so the settings in `app.json` are the source of truth.
 - `.env`: your Supabase keys. Even though the anon key is public by design, keeping secrets out of Git is a habit worth having from day one; a service-role key in Git would be a real leak.
 
-### Deploy the driver app (free)
+### Deploy the web apps (free)
 
-Push this repo to GitHub, import it in [Vercel](https://vercel.com), set the root directory to `driver-web`, and add the two environment variables from `.env`. Vercel builds it with `npm run build`.
+We'll host on **Cloudflare Pages**: its free plan has no "non-commercial only" rule (Vercel's free Hobby plan does) and no bandwidth limit for a site like this. Each web app is its own Pages project, connected to the GitHub repo:
+
+| Setting | Driver app | Operator web app |
+| --- | --- | --- |
+| Root directory | `driver-web` | `operator-web` |
+| Build command | `npm run build` | `npm run build` |
+| Build output directory | `dist` | `dist` |
+| Environment variables | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | the same two, plus `VITE_CHECKIN_SHORTCUT_URL` |
+
+Every `git push` then rebuilds both sites. A full click-by-click walkthrough comes when we deploy.
 
 ---
 
 ## How the whole system fits together
 
-There are three apps and one backend. The driver app and operator app exist; the admin panel is next.
+There are four front ends and one backend: the driver web app, the Android operator app, the iPhone operator web app (with its check-in shortcut), and the admin panel, which is next.
 
 ```
  Driver's phone                 Supabase (free tier)                 Operator's phone
@@ -162,7 +189,7 @@ There are three apps and one backend. The driver app and operator app exist; the
 
 1. The driver's browser asks the database for available operators near a point.
 2. The database checks who is approved, available, recently seen and properly licensed, rounds their positions, and returns a list sorted by distance.
-3. Operators' phones keep sending their position while they are switched to Available.
+3. Operators' phones send their position while they are switched to Available: Android every minute in the background, iPhones every minute while the web app is open plus a check-in each time they open Maps or their dispatch app.
 4. Calling is just a `tel:` link, so the phone's own dialer makes the call. Tow Connect never sits in the middle of the call or the payment.
 
 **The main idea:** all the rules that matter (who is shown, what drivers can see, who can approve whom) live in the database, not in the apps. An app can have a bug, or someone can write their own client against our public key, and the rules still hold. That is why the database is the most carefully tested part.
@@ -171,7 +198,7 @@ There are three apps and one backend. The driver app and operator app exist; the
 
 ## The database, explained
 
-File: `supabase/migrations/20261020000000_init.sql`. It runs top to bottom once and builds everything.
+Files: `supabase/migrations/20261020000000_init.sql` builds everything; `20261109000000_iphone_checkin.sql` adds iPhone check-ins and adjusts two time limits (explained in the iPhone section). Each runs top to bottom once.
 
 ### Tables
 
@@ -219,12 +246,12 @@ A trigger is a function Postgres runs automatically before a row is saved. We us
 
 ### The two public functions (RPCs)
 
-An RPC ("remote procedure call") is a database function the app calls by name, like calling a function in code. These are the **only** two things the public key can do.
+An RPC ("remote procedure call") is a database function the app calls by name, like calling a function in code. These two, plus `checkin` from the second migration (see the iPhone section), are the **only** things the public key can do.
 
 **`nearby_operators(lat, lng, radius_km, limit)`** answers "who can help me?" Step by step:
 
 1. **Clamps the inputs** so a bad request can't ask for a 10,000 km radius or 5,000 results.
-2. **Finds eligible operators:** approved, switched to Available, position updated in the last 10 minutes, and holding a verified, unexpired tow license **and** a verified, unexpired insurance record (LR-5). If insurance expires tonight, the operator disappears from the map tomorrow with no human action needed.
+2. **Finds eligible operators:** approved, switched to Available, position updated in the last 30 minutes (10 before the second migration), and holding a verified, unexpired tow license **and** a verified, unexpired insurance record (LR-5). If insurance expires tonight, the operator disappears from the map tomorrow with no human action needed.
 3. **Rounds each position to 2 decimal places** (for example 38.93456 becomes 38.93). Each step of 0.01° is about 0.5 to 0.7 miles in DC, so the shown point is never more than about half a mile from the truck. Drivers see the area, never the exact spot (NFR-4).
 4. **Measures distance** from the driver to the rounded point with the haversine formula (distance along the Earth's curve), and keeps those inside the radius.
 5. **Sorts closest first** and returns only the public profile fields.
@@ -235,7 +262,7 @@ It is marked `SECURITY DEFINER`, meaning it runs with the permissions of whoever
 
 ### Housekeeping functions
 
-- `expire_stale_availability()` switches off operators whose phone hasn't sent a position in 30 minutes, for example when the phone died mid-shift (FR-O8).
+- `expire_stale_availability()` switches off operators whose phone hasn't sent a position in 3 hours, for example when the phone died mid-shift (FR-O8). It was 30 minutes before the second migration.
 - `purge_old_pings()` deletes location history older than 30 days (NFR-5).
 
 Only the project owner can run these. The bottom of the migration shows how to schedule them with Supabase's built-in `pg_cron`.
@@ -508,7 +535,7 @@ This is the feature that needs a native app, so it's worth understanding step by
 | Rule | Why |
 | --- | --- |
 | Always send the first fix | The truck appears immediately |
-| Send at least once a minute, even when parked | A parked truck waiting for calls is the common case, and the database hides positions older than 10 minutes |
+| Send at least once a minute, even when parked | A parked truck waiting for calls is the common case, and the database hides positions older than 30 minutes |
 | Send early after moving 150 m, but at most every 15 s | A moving truck stays roughly accurate without draining the battery |
 | Skip fixes less accurate than 250 m, unless nothing was sent for 2 minutes | One bad reading shouldn't jump the truck across town |
 
@@ -522,9 +549,127 @@ The `expo-location` plugin turns on Android's background location and foreground
 
 ---
 
+## iPhone operators: web app and auto check-in, explained
+
+**The problem:** most tow operators, including the first test company, use iPhones. Publishing the real app on iPhone costs $99 a year, and web pages on iPhone stop running the moment you switch apps or lock the phone. Those operators keep their phone in a pocket or a mount, with Maps or a dispatch app in front.
+
+**The free answer has three parts:**
+
+```
+ Operator's iPhone                                         Supabase
+ ─────────────────                                         ────────
+ Operator web app (home screen) ──while open, every minute──▶ operator_positions (signed in)
+        │ makes a check-in code once
+        ▼
+ Shortcuts app: "Tow Connect Check-in"
+   runs automatically when Maps / dispatch app opens,
+   or the truck's Bluetooth / CarPlay connects  ──checkin(code, lat, lng)──▶ checkin() ──▶ operator_positions
+```
+
+1. **The operator web app** (`operator-web/`) does everything the Android app does: sign-up, documents, trucks, the Available button. It shares location every minute while it's on screen, and can keep the screen awake for phones in a dash mount.
+2. **The auto check-in shortcut** sends the operator's location whenever they open Maps or their dispatch app, which they do all day anyway. It uses a personal check-in code instead of a login.
+3. **Freshness rules in the database** were adjusted so these "moment" check-ins work: a position counts for 30 minutes, and drivers see its age.
+
+### The database changes (`supabase/migrations/20261109000000_iphone_checkin.sql`)
+
+**Why a second migration file instead of editing the first:** your Supabase project already ran the first file. Migrations are a history, applied in order: a database that has file 1 only needs file 2. If we edited file 1, your project would never get the change. The tests run every file in `migrations/` in name order, the same way.
+
+**`operator_checkin_codes`**: one row per operator, holding a **hash** of their code, never the code itself.
+
+- A hash (SHA-256 here) is a one-way fingerprint: easy to compute from the code, impossible to turn back into the code. When a check-in arrives, the database hashes the code it was sent and looks for that fingerprint. This is the same reason websites store password hashes: if the table ever leaked, the codes still couldn't be used.
+- Because only the hash is stored, the code can be shown **once**, right after it's made. Lost it? Make a new one, which also cancels the old one.
+- The code is 64 random characters built from two `gen_random_uuid()` values, which come from Postgres's secure random generator. Guessing one is not realistic.
+
+**`create_checkin_code()`** and **`delete_checkin_code()`**: only a signed-in operator can call them, and only for their own row (they look the operator up with `auth.uid()`).
+
+**`checkin(code, lat, lng)`**: the only thing the shortcut can do. It's callable with the public key, like `nearby_operators`, and it's `SECURITY DEFINER` for the same "bank teller" reason. Step by step:
+
+1. Rejects anything that isn't a 64-character code, then looks up the hash. A wrong code gets "not recognized," and never a hint about whether someone else's code exists.
+2. Rejects an impossible location (latitude outside -90 to 90, for example).
+3. Records when the code was last used, so the operator sees "Last check-in: 3 min ago" in the app.
+4. **Refuses if the operator is offline or not approved.** The shortcut only updates *where* they are; going Available stays a deliberate tap in the app. Otherwise, opening Maps on a day off would put them on the map.
+5. Ignores a second check-in within 15 seconds (opening Maps and then the dispatch app back to back), so the history isn't doubled.
+6. Saves the position through the same `operator_positions` table, so the existing trigger stamps the time and keeps the 30-day history. Nothing downstream needed to change.
+
+It answers with a short message (`{"ok": false, "message": "You're offline in Tow Connect..."}`), which the shortcut shows as a notification when something is wrong.
+
+**The two timing changes**, and why they work together:
+
+| Rule | Before | Now | Why |
+| --- | --- | --- | --- |
+| A position stays on the driver map for | 10 min | **30 min** | iPhone positions arrive at moments, not every minute. Drivers see "Location from 14 min ago," so nobody is misled. |
+| An operator is switched offline after no position for | 30 min | **3 hours** | Between 30 minutes and 3 hours the operator is hidden but still Available, so their next check-in puts them straight back on the map without opening the app. |
+
+Android phones still send every minute, so for them nothing changes in practice.
+
+### The operator web app (`operator-web/`)
+
+A Vite + React app, like the driver app, with the same screens as the Android app. Most of it was ported line for line:
+
+```
+operator-web/
+├── index.html            Home-screen settings for iPhone (name, icon, full-screen)
+├── public/               Icon (SVG, plus a 180×180 PNG because iPhones need one), manifest
+├── src/
+│   ├── App.jsx               Same screen rules as operator-app/App.js
+│   ├── lib/api.js            Same calls as the Android app, plus the check-in code functions
+│   ├── lib/useOperatorData.js   Copied unchanged from the Android app
+│   ├── shared/               Four files copied unchanged from the Android app (see below)
+│   ├── location/sharing.js   Location while the page is open, and "keep screen on"
+│   ├── components/
+│   │   ├── CheckinSection.jsx   Make a code, copy it, setup steps, last check-in time
+│   │   ├── InstallHint.jsx      "Add to Home Screen" tip, only in iPhone Safari
+│   │   └── ui, TrucksSection, DocumentsSection   Web versions of the Android components
+│   └── screens/              AuthScreen, ProfileForm, SetupScreen, HomeScreen, SuspendedScreen
+└── tests/shared.test.mjs     Fails if a shared copy drifts from the Android original
+```
+
+**Sharing code between the two apps:** `validate.js`, `documents.js`, `dates.js`, `throttle.js` and `useOperatorData.js` contain no screen code, so they work in both apps unchanged. They're **copies**, because the Android build tool (Metro) and the web build tool (Vite) each expect files inside their own folder; linking across folders needs extra configuration in both. The risk with copies is that a fix lands in one and not the other, so `tests/shared.test.mjs` compares them byte for byte. **The rule:** change the file in `operator-app`, then copy it to `operator-web`. The test reminds you if you forget.
+
+**`location/sharing.js`**, the web version of location sharing:
+
+- **While the page is visible:** `watchPosition` delivers fixes, the same `shouldSend` throttle as Android decides which to send, and a once-a-minute timer resends the newest fix so a parked truck doesn't go stale.
+- **When the page comes back on screen** (after using Maps, for example): it immediately gets and sends a fresh position. That's the best moment, because the operator is looking at the app.
+- **When it's hidden:** nothing runs, because iPhone pauses the page. The shortcut covers that time.
+- **"Keep screen on"** uses the Screen Wake Lock API. iPhone supports it in Safari from iOS 16.4, and in home-screen web apps from iOS 18.4, which every iPhone 13 or newer can run. The browser drops the lock whenever the page is hidden, so the code asks again each time it's visible. It's off by default, because a screen kept on in a pocket would drain the battery and register accidental taps.
+- **A tiny "store":** screens call `subscribe()` to hear about status changes ("last sent," errors), instead of checking on a timer.
+
+**`CheckinSection.jsx`**: three states. Not set up (explain and offer to set up), code just made (show it once, copy button, setup steps), or set up (last check-in time, make a new code, turn off). The code lives only in that component's memory, so leaving the page forgets it, matching the database, which never stored it.
+
+**`InstallHint.jsx`**: iPhones have no "install this site" button a website can show, so in Safari on an iPhone, and only when the page isn't already opened from the home screen, the app explains the two taps (Share, then Add to Home Screen). `navigator.standalone` is the Apple-only flag that tells us we're running from the home screen. Dismissing it is remembered in `localStorage`, wrapped in `try/catch` because private browsing can block storage.
+
+### Build the check-in shortcut (one time, on an iPhone)
+
+Shortcuts can't be written as a file and shared from a computer; they're built on an iPhone and shared as an iCloud link. You build it once, and every operator installs it from your link.
+
+1. Open the **Shortcuts** app, tap **+**, and name it **Tow Connect Check-in**.
+2. Add a **Text** action. Type `PASTE-YOUR-CODE` in it. (This becomes the question each operator answers.)
+3. Add **Get Current Location**.
+4. Add **Get Contents of URL** and set:
+   - URL: `https://YOUR-PROJECT.supabase.co/rest/v1/rpc/checkin` (your project URL plus `/rest/v1/rpc/checkin`)
+   - Method: **POST**
+   - Headers: `apikey` = your **publishable** key, and `Content-Type` = `application/json`
+   - Request Body: **JSON**, with three fields:
+     - `p_code` (Text) = the **Text** variable from step 2
+     - `p_lat` (Number) = **Current Location**, then tap it and choose **Latitude**
+     - `p_lng` (Number) = **Current Location**, then choose **Longitude**
+5. Add **Get Dictionary Value**: get the value for key `message` from **Contents of URL**.
+6. Add **If**: Dictionary Value **is not** `Location updated`. Inside it, add **Show Notification** with the Dictionary Value. (So it stays silent when it works and tells the operator why when it doesn't.)
+7. Open the shortcut's settings, tap **Setup**, then **Add New Question**, pick the text from step 2, and set the question to **"Paste your check-in code from the Tow Connect app."** Apple then clears that value when you share and asks each person for their own.
+8. Run it once yourself with a real code (you'll be asked to allow location and the connection to supabase.co).
+9. Share it: **Share → Copy iCloud Link**, and put the link in `operator-web/.env` as `VITE_CHECKIN_SHORTCUT_URL`. The app's setup steps link to it.
+
+**What each operator does** is shown in the app, step by step: get the shortcut, paste their code, run it once and tap **Allow / Always Allow**, then add automations in the **Automation** tab (App → Maps and their dispatch app → Is Opened → **Run Immediately**). Optionally they add a second automation for their truck's Bluetooth or CarPlay.
+
+**Why the publishable key is safe inside the shortcut:** it's the same public key the websites use. On its own it can only call `nearby_operators`, `submit_report` and `checkin`, and `checkin` does nothing without a valid code.
+
+**Honest limits:** I couldn't test Shortcuts from here; the first real test is on an iPhone. A shortcut only sends a location when one of its triggers happens, so an operator parked for an hour without touching their phone has an hour-old position (hidden after 30 minutes until their next check-in). iOS shows a small notice each time an automation runs.
+
+---
+
 ## The tests, explained
 
-There are two test suites: the database rules, and the operator app's logic.
+There are three test suites (the database rules, the operator app's logic, and the shared-file check) plus two browser click-throughs.
 
 ### Database security tests
 
@@ -533,15 +678,16 @@ File: `supabase/tests/security.test.mjs`.
 It uses **PGlite**, real Postgres compiled to run inside Node.js, so it needs no install and no Supabase account. The test:
 
 1. Creates stand-ins for the Supabase pieces our migration expects: the `anon` and `authenticated` roles, `auth.users`, `auth.uid()` (which reads a setting the test controls), and a minimal `storage` schema.
-2. Runs the real migration and seed files, unchanged.
+2. Runs every real migration file in name order, then the seed file, unchanged.
 3. Pretends to be different people by switching roles (`set role anon`) and setting who `auth.uid()` returns, then checks what each person can and can't do.
 
-What the 32 checks cover:
+What the 50 checks cover:
 
 - **The public:** sees exactly the 6 demo operators near DC, positions are rounded, sorted by distance, nobody shows up from New York, can't read any table, can't run housekeeping, can file a report but can't read reports.
 - **An operator signing up:** is forced to `pending`, can't approve themselves, can't go Available while pending, can't verify their own documents, and is invisible to other users.
 - **After admin approval:** appears on the map at the rounded position, each position update leaves exactly one history row, can still change their phone number, but can't change their license number.
-- **Automatic removal:** expired insurance hides them, a position older than 10 minutes hides them, housekeeping switches stale operators off, and a suspended operator can't switch back on.
+- **Automatic removal:** expired insurance hides them; a 20-minute-old position still shows but a 45-minute-old one doesn't; at 45 minutes they're hidden but still Available; housekeeping switches them off after 3 hours; and a suspended operator can't switch back on.
+- **iPhone check-ins:** the public key can't make codes or read the codes table; codes are 64 random characters and only their hash is stored; a wrong code learns nothing; check-ins are refused while offline or suspended; a valid check-in puts the operator on the map; a second one within 15 seconds isn't written twice; impossible locations are rejected; a new code cancels the old one; deleting turns check-ins off; and nobody can delete someone else's code.
 - **Re-uploading a document** resets its verification.
 - **Storage:** an operator can upload to their own folder but not someone else's.
 
@@ -550,9 +696,14 @@ What the 32 checks cover:
 Folder: `operator-app/tests/`. Run with `npm test` in `operator-app`. They use Node's built-in test runner (`node --test`), so there's nothing extra to install.
 
 - **`throttle.test.mjs`** (7 tests): first fix is sent, a parked truck checks in every minute, moving 150 m sends early but not more than every 15 s, small moves wait, rough fixes are skipped, and late-arriving old fixes are ignored.
-- **`documents.test.mjs`** (11 tests): missing, in review, verified, expiring and expired documents; a renewal in review keeps the old record in effect; expiry dates like 2027-02-31 or yesterday are rejected; the phone check uses exactly the database's pattern; money and date formatting.
+- **`documents.test.mjs`** (12 tests): missing, in review, verified, expiring and expired documents; a renewal in review keeps the old record in effect; expiry dates like 2027-02-31 or yesterday are rejected; the phone check uses exactly the database's pattern; money parsing and formatting ($4.50, never $4.5); date formatting.
 
 These cover the parts of the app that are pure logic. The screens and the real background location need a phone or emulator; the app was also checked by building a full Android bundle and generating the Android project to confirm the background location permissions are in it.
+
+### Operator web app checks
+
+- **`operator-web/tests/shared.test.mjs`** (5 tests): each shared file is byte-for-byte identical to its Android original.
+- **Browser click-through** (18 checks, run on an iPhone-sized screen against a fake in-memory Supabase): the Add to Home Screen tip appears in iPhone Safari; sign-up and profile validation; trucks; document uploads land in the operator's own folder and impossible dates are refused; approval shows the Available switch; going Available sends a first position before setting Available; the check-in code is shown once, copies to the clipboard, and isn't shown again; going offline; reopening the page while Available resumes sharing; blocked location never sets Available; and rates show as $4.50.
 
 **Why test the database and not the screens first:** a bug in the screens is visible and annoying; a bug in the security rules is invisible and dangerous (leaked locations, self-approved operators). The screens were checked by clicking through every flow in a headless browser.
 
@@ -568,7 +719,14 @@ These cover the parts of the app that are pure logic. The screens and the real b
 | Operator sign-in | Email and password | Phone number with a texted code | Texted codes cost money per message; email sign-in is free. |
 | When location permission is "only while using" | Keep working in foreground mode and say so | Refuse to go Available | Expo's docs say apps must always be ready for foreground-only permission, and a partly working app is better than none. |
 | GPS accuracy | Balanced (about 100 m) | High (GPS) | Drivers only see positions rounded to about half a mile, so extra precision only costs battery. |
-| How often to send | First fix, every minute, sooner after 150 m | Every fix, or only on movement | Every fix wastes battery and free-tier requests; movement-only makes a parked truck disappear after 10 minutes. |
+| How often to send | First fix, every minute, sooner after 150 m | Every fix, or only on movement | Every fix wastes battery and free-tier requests; movement-only makes a parked truck disappear after 30 minutes. |
+| iPhone operators | Free web app + auto check-in shortcut | Pay $99/yr for the App Store; web app only; skip iPhones | Most operators use iPhones. A web page alone pauses when Maps is open, but operators open Maps and their dispatch app all day, so a shortcut on those moments keeps them fresh for $0. The native iPhone app stays ready for when a school or nonprofit can publish it with Apple's fee waived. |
+| What the shortcut may do | Only update the location of an operator who is already Available | Also switch them Available | Going Available should always be a deliberate choice; otherwise opening Maps on a day off would list them. |
+| Storing check-in codes | A SHA-256 hash, shown once | Store the code | If the table ever leaked, hashes can't be used. Showing it once is the price, and "make a new code" covers losing it. |
+| How long a position counts | 30 minutes, with its age shown to drivers | 10 minutes | iPhone positions arrive at moments, not every minute. Showing the age keeps it honest. |
+| When to switch someone offline | After 3 hours with no position | After 30 minutes | Lets the next check-in bring a quiet operator straight back, without them reopening the app. |
+| Changing a database that's already live | A new migration file | Edit the first file | A database that already ran file 1 would never see an edit to it. |
+| Sharing logic between the two operator apps | Copies, plus a test that they match | One shared folder | Both build tools want files inside their own folder; linking across needs extra setup in both. The test makes copies safe. |
 | Renewing a document | Add a new record | Replace the old one | Replacing would hide the operator until an admin checked the new copy. Adding keeps the old, still-valid one in effect meanwhile. |
 | Backend | Supabase | Firebase, a custom server | Free tier fits; real Postgres means real SQL, triggers and RLS. Firebase's free limit of 20,000 writes a day is too tight for location updates, and a custom server means hosting and patching something ourselves. |
 | Where rules live | In the database (RLS, triggers, RPCs) | In app code | Rules in the database protect every client, including ones we didn't write. Rules in app code protect only that app. |
@@ -607,6 +765,11 @@ Short definitions for explaining the project to someone else.
 - **Background task:** code the phone runs when the app isn't on screen, here to deliver new locations.
 - **Foreground service:** Android's rule that an app using location in the background must show a permanent notification, so people always know.
 - **Upsert:** insert a row if it doesn't exist, update it if it does.
+- **Migration:** a file of database changes, applied once and in order. The list of migration files is the history of how the database got its shape.
+- **Hash (SHA-256):** a one-way fingerprint of some text. The same text always gives the same fingerprint, but the fingerprint can't be turned back into the text.
+- **Shortcuts automation:** an iPhone feature that runs a shortcut when something happens, like an app opening or a Bluetooth device connecting. Since iOS 17 it can run without asking first.
+- **Home-screen web app:** a website added to the iPhone home screen. It opens full screen, and `navigator.standalone` is true inside it.
+- **Screen Wake Lock:** a browser feature that keeps the screen from dimming and locking while a page is visible.
 - **Environment variable (`EXPO_PUBLIC_…`, `VITE_…`):** a setting kept outside the code (in `.env`). The prefix tells the build tool it's safe to put into the app.
 
 ---
@@ -616,19 +779,37 @@ Short definitions for explaining the project to someone else.
 In order, with the reason for the order:
 
 1. ~~Put the project on GitHub.~~ Done.
-2. **Create the Supabase project** and connect both apps (see "Connect the real backend"). Everything from here needs it.
-3. **Set up the Android emulator and run the end-to-end test** (see "The operator app"): an operator goes Available and appears in the driver app.
-4. **Build the admin panel.** Replaces the SQL snippets for approving operators and handling reports.
-5. **Open the Google Play developer account early** ($25 once). New personal accounts must run a closed test with 12 testers for 14 straight days before publishing, so starting the clock early saves two weeks at the end.
-6. **Legal checks:** take the terms, privacy policy and accident flow to a free legal clinic, and ask MPD or DLCP how they treat driver-chosen tows in DC.
-7. **Recruit 10 to 20 DC operators,** who can also be the 12 Play Store testers.
-8. **Deploy the driver app on Vercel and launch.**
+2. **Create the Supabase project**, run both migrations, and connect the apps (see "Connect the real backend"). Everything from here needs it.
+3. **Deploy the two web apps on Cloudflare Pages**, so the operator web app has the `https://` address iPhones need for location.
+4. **Test with your dad:** he signs up on the operator web app, you approve him with SQL, you build and share the check-in shortcut, and he sets up the automations. Then check that his truck appears in the driver app when he opens Maps.
+5. **Add "Still available?" push reminders** for iPhone operators whose position is getting old.
+6. **Build the admin panel.** Replaces the SQL snippets for approving operators and handling reports.
+7. **Optional, for Android operators:** set up the Android emulator and test the Android app (see "The operator app").
+8. **Open the Google Play developer account early** ($25 once). New personal accounts must run a closed test with 12 testers for 14 straight days before publishing, so starting the clock early saves two weeks at the end.
+9. **Legal checks:** take the terms, privacy policy and accident flow to a free legal clinic, and ask MPD or DLCP how they treat driver-chosen tows in DC.
+10. **Recruit 10 to 20 DC operators,** starting with your dad's company. Android operators can also be the 12 Play Store testers.
+11. **Ask Catholic University or a nonprofit partner** about publishing the native iPhone app with Apple's fee waived.
+12. **Launch.**
 
 ---
 
 ## Change log
 
 Every change gets an entry here: what changed, how it works, and why it was done that way. Newest first.
+
+### 2026-11-09: iPhone operators (web app + auto check-in)
+
+- **What changed:**
+  - New migration `20261109000000_iphone_checkin.sql`: check-in codes (stored as hashes), `create_checkin_code`, `delete_checkin_code`, and `checkin`; positions now count for 30 minutes (was 10); automatic offline after 3 hours without a position (was 30 minutes).
+  - New `operator-web/` app for iPhones: the same screens as the Android app, location while open, "keep screen on," auto check-in setup, and an Add to Home Screen tip.
+  - Driver app: the list shows "Location from 14 min ago" when a position is more than 5 minutes old. One demo truck now shows this.
+  - Both operator apps: rates show cents correctly ($4.50, not $4.5) via a new shared `formatMoney`; uploads are capped at 5 MB in both.
+  - Tests: the database tests now run every migration in order (50 checks, up from 32; the old "switched off after 30 minutes" check became "after 3 hours"). Added a money-format test to the operator app (19) and the shared-file test to the operator web app (5).
+  - README: setup for the second migration and the web app, the shortcut build guide, Cloudflare Pages instead of Vercel, and the explanation sections.
+- **How it works:** see "iPhone operators: web app and auto check-in, explained."
+- **Why:** most operators, including the first test company, use iPhones. Publishing the real iPhone app costs $99 a year, and a web page alone stops when Maps is open. Operators open Maps and their dispatch app constantly, so a free iPhone Shortcuts automation on those moments keeps their position fresh. Hosting moved to Cloudflare Pages because Vercel's free plan is limited to non-commercial personal use.
+- **How it was checked:** all three test suites pass, both web apps and the Android bundle build, and an 18-step browser click-through of the operator web app ran on an iPhone-sized screen against a fake backend with no page errors. The click-through caught the $4.5 bug. The driver app click-through still passes.
+- **Not tested here:** the iPhone shortcut itself (needs a real iPhone) and push reminders (not built yet).
 
 ### 2026-10-22: Operator app (MVP)
 

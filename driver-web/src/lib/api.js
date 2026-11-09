@@ -27,7 +27,7 @@ function demoNearby({ lat, lng, radiusKm }) {
       approx_lat,
       approx_lng,
       distance_km: distanceKm(lat, lng, approx_lat, approx_lng),
-      position_age_s: 30,
+      position_age_s: op.id === 'demo-2' ? 14 * 60 : 30, // demo-2 acts like an iPhone check-in from 14 min ago
       is_demo: true,
     }
   })
