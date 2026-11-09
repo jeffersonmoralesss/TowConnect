@@ -1,8 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CheckIn from './components/CheckIn.jsx'
+import ListingList from './components/ListingList.jsx'
+import ListingSheet from './components/ListingSheet.jsx'
 import OperatorList from './components/OperatorList.jsx'
 import OperatorSheet from './components/OperatorSheet.jsx'
-import { fetchNearbyOperators, isDemo } from './lib/api.js'
+import { fetchNearbyListings, fetchNearbyOperators, isDemo } from './lib/api.js'
 import { DC_CENTER, getCurrentPosition } from './lib/geo.js'
 
 // The map library is large (about 290 KB zipped). lazy() splits it into its own file that only
@@ -53,6 +55,10 @@ function FindTow({ notice }) {
   const [operators, setOperators] = useState([])
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [selectedId, setSelectedId] = useState(null)
+  // Directory listings: companies not on Tow Connect. They don't move, so they load once per search
+  // point instead of every 20 seconds.
+  const [listings, setListings] = useState([])
+  const [selectedListingId, setSelectedListingId] = useState(null)
   // A ref always holds the latest search point, so the load() function below can stay the same
   // function forever (no dependencies) and the refresh timer doesn't need restarting on every render.
   const searchRef = useRef(searchPoint)
@@ -97,15 +103,40 @@ function FindTow({ notice }) {
     return () => clearInterval(timer)
   }, [locating, searchPoint.lat, searchPoint.lng, load])
 
+  useEffect(() => {
+    if (locating) return undefined
+    let cancelled = false
+    fetchNearbyListings(searchPoint)
+      .then((list) => !cancelled && setListings(list))
+      .catch(() => !cancelled && setListings([])) // the directory is extra; live trucks still work without it
+    return () => {
+      cancelled = true
+    }
+  }, [locating, searchPoint])
+
   const selected = useMemo(() => operators.find((op) => op.id === selectedId) ?? null, [operators, selectedId])
+  const selectedListing = useMemo(
+    () => listings.find((c) => c.id === selectedListingId) ?? null,
+    [listings, selectedListingId],
+  )
   const closeSheet = useCallback(() => setSelectedId(null), [])
+  const closeListing = useCallback(() => setSelectedListingId(null), [])
 
   return (
     <main className="find">
       <div className="find-panel">
         {notice && <p className="notice">{notice}</p>}
         <LocationLine locating={locating} userLocation={userLocation} />
-        <Results status={status} operators={operators} selectedId={selectedId} onSelect={setSelectedId} onRetry={() => load()} />
+        <Results
+          status={status}
+          operators={operators}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          onRetry={() => load()}
+          listings={listings}
+          selectedListingId={selectedListingId}
+          onSelectListing={setSelectedListingId}
+        />
       </div>
       <Suspense fallback={<div className="map map-fallback">Loading map</div>}>
         <MapView
@@ -114,9 +145,13 @@ function FindTow({ notice }) {
           operators={operators}
           selectedId={selectedId}
           onSelect={setSelectedId}
+          listings={listings}
+          selectedListingId={selectedListingId}
+          onSelectListing={setSelectedListingId}
         />
       </Suspense>
       {selected && <OperatorSheet operator={selected} onClose={closeSheet} />}
+      {selectedListing && <ListingSheet listing={selectedListing} onClose={closeListing} />}
     </main>
   )
 }
@@ -131,7 +166,7 @@ function LocationLine({ locating, userLocation }) {
   )
 }
 
-function Results({ status, operators, selectedId, onSelect, onRetry }) {
+function Results({ status, operators, selectedId, onSelect, onRetry, listings, selectedListingId, onSelectListing }) {
   if (status === 'loading' && operators.length === 0) {
     return <p className="results-state" role="status">Looking for available tow trucks</p>
   }
@@ -151,12 +186,32 @@ function Results({ status, operators, selectedId, onSelect, onRetry }) {
       </div>
     )
   }
+
+  const directory =
+    listings.length > 0 ? (
+      <ListingList
+        listings={listings}
+        selectedId={selectedListingId}
+        onSelect={onSelectListing}
+        intro={
+          operators.length
+            ? "These companies aren't on Tow Connect, so we can't confirm they're free or what they charge. Call to ask."
+            : "No Tow Connect trucks are live near you right now. These licensed companies aren't on Tow Connect, so call to ask if they're free and what they charge."
+        }
+      />
+    ) : null
+
   if (operators.length === 0) {
     return (
-      <div className="results-state" role="status">
-        <p>No verified tow trucks are available near you right now.</p>
-        <p>New trucks appear as operators come online, and this list refreshes on its own. You can also call the roadside number on your insurance card.</p>
-      </div>
+      <>
+        {listings.length === 0 ? (
+          <div className="results-state" role="status">
+            <p>No verified tow trucks are available near you right now.</p>
+            <p>New trucks appear as operators come online, and this list refreshes on its own. You can also call the roadside number on your insurance card.</p>
+          </div>
+        ) : null}
+        {directory}
+      </>
     )
   }
   return (
@@ -166,6 +221,7 @@ function Results({ status, operators, selectedId, onSelect, onRetry }) {
       </h1>
       <OperatorList operators={operators} selectedId={selectedId} onSelect={onSelect} />
       <p className="fine-print">Closest first. Tap a company for rates and license details.</p>
+      {directory}
     </>
   )
 }

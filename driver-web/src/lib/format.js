@@ -24,6 +24,19 @@ export function rateSummary(op) {
   return 'Ask for rates'
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// '2027-06-30' -> 'Jun 2027', built from the text so the time zone can't shift it to the day before.
+const monthYear = (iso) => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`
+
+// What we can honestly say about a directory listing's license.
+export function licenseLine(listing) {
+  if (listing.source === 'dc_license' && listing.license_end_date) {
+    return `DC license active through ${monthYear(listing.license_end_date)}`
+  }
+  if (listing.source === 'dc_license') return 'DC license on record'
+  return `Added by Tow Connect, checked ${monthYear(listing.last_checked_on)}`
+}
+
 export function telHref(phone) {
   return `tel:${phone.replace(/[^\d+]/g, '')}`
 }

@@ -43,3 +43,26 @@ export const DEMO_OPERATORS = [
     lat: 38.9404, lng: -77.0247,
   },
 ]
+
+// Same three made-up directory listings as supabase/seed.sql: companies "not on Tow Connect".
+// Takoma is marked as home-based, so (like the database) it gets no pin and no address.
+export const DEMO_LISTINGS = [
+  {
+    id: 'listing-1', name: 'Eastern Avenue Towing (sample)', phone: '(202) 555-0171',
+    address: '1200 Sample St NE, Washington, DC', area_label: null, lat: 38.9196, lng: -76.9842,
+    show_exact_location: true, jurisdiction: 'DC', services: ['Towing', 'Jump start'], source: 'manual',
+    license_end_date: null, last_checked_on: '2026-11-09',
+  },
+  {
+    id: 'listing-2', name: 'Navy Yard Wrecker Service (sample)', phone: '(202) 555-0174',
+    address: '50 Example Ave SE, Washington, DC', area_label: null, lat: 38.876, lng: -77.002,
+    show_exact_location: true, jurisdiction: 'DC', services: ['Towing', 'Accident recovery'], source: 'manual',
+    license_end_date: null, last_checked_on: '2026-11-09',
+  },
+  {
+    id: 'listing-3', name: 'Takoma Family Towing (sample)', phone: '(202) 555-0177',
+    address: null, area_label: 'Takoma, DC', lat: 38.971, lng: -77.018,
+    show_exact_location: false, jurisdiction: 'DC', services: ['Towing', 'Lockout'], source: 'manual',
+    license_end_date: null, last_checked_on: '2026-11-09',
+  },
+]

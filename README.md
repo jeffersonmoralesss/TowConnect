@@ -13,11 +13,12 @@ The requirements live in the SRS doc. This repo holds the code. IDs like FR-D3 o
 5. [The driver app, explained](#the-driver-app-explained)
 6. [The operator app, explained](#the-operator-app-explained)
 7. [iPhone operators: web app and auto check-in, explained](#iphone-operators-web-app-and-auto-check-in-explained)
-8. [The tests, explained](#the-tests-explained)
-9. [Why these choices](#why-these-choices)
-10. [Concepts to know](#concepts-to-know)
-11. [Next steps](#next-steps)
-12. [Change log](#change-log)
+8. [The company directory, explained](#the-company-directory-explained)
+9. [The tests, explained](#the-tests-explained)
+10. [Why these choices](#why-these-choices)
+11. [Concepts to know](#concepts-to-know)
+12. [Next steps](#next-steps)
+13. [Change log](#change-log)
 
 ---
 
@@ -25,8 +26,8 @@ The requirements live in the SRS doc. This repo holds the code. IDs like FR-D3 o
 
 | Folder | What it is | Status |
 | --- | --- | --- |
-| `supabase/` | Database (two migrations), security rules, demo data and security tests | Ready |
-| `driver-web/` | Driver web app (PWA): check-in, map, operator profiles, call, report | Ready (MVP) |
+| `supabase/` | Database (three migrations), security rules, demo data, the DC tow company import script, and tests | Ready |
+| `driver-web/` | Driver web app (PWA): check-in, map, live trucks, directory of other licensed companies, call, report | Ready (MVP) |
 | `operator-app/` | Operator app for Android (React Native + Expo): sign-up, documents, Available switch, background location | Ready (MVP) |
 | `operator-web/` | Operator web app for iPhones: the same screens, plus auto check-in through an iPhone shortcut | Ready (MVP) |
 | `admin/` | Admin panel for approving operators and handling reports | Next |
@@ -52,7 +53,7 @@ Open the address it prints (usually http://localhost:5173). On your phone, use t
 ```bash
 cd supabase/tests        # database security rules
 npm install
-npm test                 # expect: 50 passed, 0 failed
+npm test                 # expect: 65 passed, 0 failed, then pass 7 (the import tests)
 
 cd ../../operator-app    # operator app logic (no phone needed)
 npm install
@@ -66,7 +67,7 @@ npm test                 # expect: pass 5, fail 0
 ### Connect the real backend (free)
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. In the project's **SQL Editor**, run each file in `supabase/migrations/` **in name order**: first `20261020000000_init.sql`, then `20261109000000_iphone_checkin.sql`. If you already ran the first one, run only the second. Each file runs once.
+2. In the project's **SQL Editor**, run each file in `supabase/migrations/` **in name order**: `20261020000000_init.sql`, then `20261109000000_iphone_checkin.sql`, then `20261109010000_directory_and_hardening.sql`. Skip any you've already run; each file runs once. The third one also schedules the cleanup jobs (you'll see a notice saying so).
 3. Optional, for testing: run `supabase/seed.sql` to load the six demo operators.
 4. In **Settings → API Keys** (or the project's **Connect** button), copy the project URL and the **publishable** key (starts with `sb_publishable_`). The older `anon` key also works, but Supabase plans to retire it by the end of 2026. **Never** use the secret or `service_role` key in an app.
 5. In `driver-web/`, copy `.env.example` to `.env` and paste both values. Do the same in `operator-app/` and `operator-web/`. (The variables are still named `..._ANON_KEY` because the publishable key acts as the database's `anon` role.)
@@ -90,7 +91,24 @@ insert into public.admins (user_id, email)
 select id, email from auth.users where email = 'you@example.com';
 ```
 
-**Before going public:** delete the demo operators with `delete from public.operators where is_demo;`
+**Before going public:** delete the demo data with `delete from public.operators where is_demo;` and `delete from public.listed_companies where is_demo;`
+
+### Fill the company directory (needs the backend above)
+
+1. **Import DC's licensed tow companies.** From the repo root on your Mac (it needs internet access to DC Open Data):
+   ```bash
+   node supabase/scripts/import-dc-tow-companies.mjs > dc-tow-companies.sql
+   ```
+   It prints how many companies it found. Open `dc-tow-companies.sql`, copy it all into the Supabase **SQL Editor**, and **Run**. Every company arrives hidden (`new`). `.gitignore` keeps that `.sql` file out of Git; it's a snapshot you can regenerate any time. If it finds 0 companies, run it again with `--inspect` and send me what it prints.
+2. **Review them in the Table Editor** (Supabase → **Table Editor** → `listed_companies`): a spreadsheet-like screen, no SQL needed. For each company, ideally with your dad's knowledge of who's reputable:
+   - Look it up (website, signs, Google). Does it do **roadside** towing for the public, or only private-lot towing?
+   - Roadside: type its business phone into `phone`, pick the services, and set `review_status` to `published`.
+   - Private-lot only, or unsure: set `review_status` to `hidden` and add a note in `reviewer_notes`.
+   - If the address looks like a home, turn `show_exact_location` off and type an `area_label` such as `Northeast DC`.
+3. **Add MD or VA companies by hand:** in the Table Editor, **Insert row** with `source` = `manual`, name, phone, address, `lat`/`lng` (right-click the spot in Google Maps to copy them), `jurisdiction`, and `review_status` = `published`.
+4. **Re-run the import monthly.** It refreshes license dates and never overwrites your review work.
+5. **If a company asks to be removed,** set `review_status` to `removed`. Future imports keep it removed.
+6. **When a listed company joins Tow Connect,** put its operator ID in `operator_id`, and the listing hides automatically.
 
 ### The operator app (needs the backend above)
 
@@ -246,11 +264,11 @@ A trigger is a function Postgres runs automatically before a row is saved. We us
 
 ### The two public functions (RPCs)
 
-An RPC ("remote procedure call") is a database function the app calls by name, like calling a function in code. These two, plus `checkin` from the second migration (see the iPhone section), are the **only** things the public key can do.
+An RPC ("remote procedure call") is a database function the app calls by name, like calling a function in code. These two, plus `checkin` (second migration, see the iPhone section) and `nearby_listed_companies` (third migration, see the directory section), are the **only** things the public key can do.
 
 **`nearby_operators(lat, lng, radius_km, limit)`** answers "who can help me?" Step by step:
 
-1. **Clamps the inputs** so a bad request can't ask for a 10,000 km radius or 5,000 results.
+1. **Clamps the inputs:** at most 25 km and 10 results since the third migration (it was 100 km and 50), so one request can't collect every available operator in the region.
 2. **Finds eligible operators:** approved, switched to Available, position updated in the last 30 minutes (10 before the second migration), and holding a verified, unexpired tow license **and** a verified, unexpired insurance record (LR-5). If insurance expires tonight, the operator disappears from the map tomorrow with no human action needed.
 3. **Rounds each position to 2 decimal places** (for example 38.93456 becomes 38.93). Each step of 0.01° is about 0.5 to 0.7 miles in DC, so the shown point is never more than about half a mile from the truck. Drivers see the area, never the exact spot (NFR-4).
 4. **Measures distance** from the driver to the rounded point with the haversine formula (distance along the Earth's curve), and keeps those inside the radius.
@@ -265,7 +283,7 @@ It is marked `SECURITY DEFINER`, meaning it runs with the permissions of whoever
 - `expire_stale_availability()` switches off operators whose phone hasn't sent a position in 3 hours, for example when the phone died mid-shift (FR-O8). It was 30 minutes before the second migration.
 - `purge_old_pings()` deletes location history older than 30 days (NFR-5).
 
-Only the project owner can run these. The bottom of the migration shows how to schedule them with Supabase's built-in `pg_cron`.
+Only the project owner can run these. Since the third migration they run on their own, scheduled with Supabase's built-in `pg_cron`.
 
 ### Storage
 
@@ -297,6 +315,8 @@ driver-web/
     │   ├── MapView.jsx         The map and its pins
     │   ├── OperatorList.jsx    The numbered list with Call buttons
     │   ├── OperatorSheet.jsx   An operator's full profile
+    │   ├── ListingList.jsx     Directory: companies not on Tow Connect (A, B, C)
+    │   ├── ListingSheet.jsx    A directory company's details
     │   └── ReportForm.jsx      Reporting an operator
     └── lib/
         ├── api.js          Every network call (and demo mode)
@@ -667,6 +687,70 @@ Shortcuts can't be written as a file and shared from a computer; they're built o
 
 ---
 
+## The company directory, explained
+
+**The problem:** at launch, few operators share their location, so a stranded driver could open the app and find nobody. The directory lists licensed tow companies that **aren't on Tow Connect**, so there's always someone to call, and every listed company becomes a recruiting lead.
+
+```
+ DC Open Data (license list) ──import script──▶ listed_companies (status 'new': hidden)
+                                                     │  a person reviews: adds phone, checks it does
+                                                     │  roadside towing, home address or business yard
+                                                     ▼
+                                               status 'published' ──nearby_listed_companies()──▶ driver app
+                                                                                                (grey pins A, B, C)
+```
+
+### Where the data comes from
+
+DC's Department of Licensing and Consumer Protection publishes every business license as open data, under a Creative Commons license that allows reuse with credit. Tow companies are the "Tow Truck Business" category. Each row has the business name, address, map position, license status and end date, but **no phone number**.
+
+**Why not Google Places:** Google's terms allow storing only the place ID, plus coordinates for at most 30 days. Names and addresses must be fetched fresh, and paid for, every time. It also lists any company calling itself a tow service, licensed or not. **Why not OpenStreetMap:** coverage of tow companies is very spotty.
+
+### Why a person reviews every listing
+
+Being licensed isn't enough to be helpful. Many DC-licensed tow companies do **private-lot towing**, removing parked cars for property owners, not roadside help. Listing those would send stranded drivers to exactly the kind of towers we're protecting them from. So imports arrive as `new` (hidden), and a person decides:
+
+| Review status | Meaning | Drivers see it? |
+| --- | --- | --- |
+| `new` | Imported or added, not checked yet | No |
+| `published` | Checked: does roadside towing, phone number confirmed | **Yes** |
+| `hidden` | Checked and rejected (for example, private-lot towing only) | No |
+| `removed` | The company asked to be removed | No, and re-imports keep it that way |
+
+The database refuses to publish a listing without a phone number and a location.
+
+### `listed_companies` and `nearby_listed_companies()` (`supabase/migrations/20261109010000_directory_and_hardening.sql`)
+
+- **Only admins can read or edit the table.** The public reaches it only through `nearby_listed_companies()`, just like `nearby_operators()`.
+- **What the public function returns:** published listings with a phone number, closest first, at most 10, within 25 km. It skips any company that has joined Tow Connect (`operator_id` is set), so nobody appears twice.
+- **DC-license listings drop out automatically** once their license end date passes. Re-running the import keeps those dates current.
+- **Home-based businesses:** some small operators register their home as their business address. For those, the reviewer turns off `show_exact_location`. The function then returns no address and no pin, and measures distance from a coarse grid point (0.05°, about 3 miles), so repeated searches can't narrow down the house. Because that distance is deliberately imprecise, the driver app shows "Serves Takoma, DC" instead of a mileage number.
+- **Owner and agent names are never imported.** DC's data has them; the script doesn't request them, and a test checks that.
+
+### The import script (`supabase/scripts/import-dc-tow-companies.mjs`)
+
+1. Downloads DC's license rows for the "Tow Truck Business" category, in pages of 1,000, asking only for business name, address, position and license fields.
+2. **`pickCompanies()`** keeps active licenses only, and one row per business (DC has several per business: old licenses and multiple activities), choosing the license that runs longest. It uses the trade name if there is one, and changes "SMITH TOWING LLC" to "Smith Towing LLC."
+3. **`toSql()`** writes SQL that adds new companies as `new`, and for existing ones refreshes **only the facts DC owns**: license status, end date, address and position. It never touches what a person decided: phone, review status, `show_exact_location` or notes. Companies that vanished from DC's active list get an ended license, so they drop off.
+4. Progress messages go to the "error" stream and the SQL to normal output, which is why `> dc-tow-companies.sql` captures only the SQL.
+
+`--inspect` prints the license categories and statuses DC's data contains. That's useful if the import ever finds 0 companies, which would mean DC renamed something.
+
+### In the driver app
+
+- **Live trucks always come first.** The directory sits below them under "Other licensed tow companies nearby."
+- **The directory looks deliberately quieter:** grey letters (A, B, C) instead of amber numbers, and outlined Call buttons instead of filled amber. Amber means "live and verified" everywhere in the app.
+- **When no live trucks are near,** the directory replaces the dead-end "nothing available" message, with an honest intro: these companies aren't on Tow Connect, so call to ask if they're free and what they charge.
+- **The details sheet** (`ListingSheet.jsx`) says "Not on Tow Connect," reminds the driver to ask the total price and arrival time first, shows the license line ("DC license active through Jun 2027"), credits DC's open data, and links "Is this your company? Join Tow Connect" when `VITE_OPERATOR_SIGNUP_URL` is set.
+- **Listings load once per search point,** not every 20 seconds like live trucks, because companies don't move.
+
+### The safety limits added in the same migration
+
+- **`nearby_operators()` now searches at most 25 km (about 15 miles; it was 100 km) and returns at most 10 trucks (it was 50).** A driver only needs the closest few, and a smaller answer makes it much harder to collect every available operator in the region with a few requests. Rate-limiting by address would go further, but it needs the caller's IP address, which isn't reliable from inside the database. That's left for later, with a note in "Next steps."
+- **The cleanup jobs are now scheduled automatically.** On Supabase, the migration turns on `pg_cron` and schedules them: switch off stale operators every 10 minutes, and delete location history older than 30 days every night. Scheduling by name replaces an existing job, so running the migration twice is safe. The test database has no `pg_cron`, so there it does nothing.
+
+---
+
 ## The tests, explained
 
 There are three test suites (the database rules, the operator app's logic, and the shared-file check) plus two browser click-throughs.
@@ -681,15 +765,20 @@ It uses **PGlite**, real Postgres compiled to run inside Node.js, so it needs no
 2. Runs every real migration file in name order, then the seed file, unchanged.
 3. Pretends to be different people by switching roles (`set role anon`) and setting who `auth.uid()` returns, then checks what each person can and can't do.
 
-What the 50 checks cover:
+What the 65 checks cover:
 
 - **The public:** sees exactly the 6 demo operators near DC, positions are rounded, sorted by distance, nobody shows up from New York, can't read any table, can't run housekeeping, can file a report but can't read reports.
 - **An operator signing up:** is forced to `pending`, can't approve themselves, can't go Available while pending, can't verify their own documents, and is invisible to other users.
 - **After admin approval:** appears on the map at the rounded position, each position update leaves exactly one history row, can still change their phone number, but can't change their license number.
 - **Automatic removal:** expired insurance hides them; a 20-minute-old position still shows but a 45-minute-old one doesn't; at 45 minutes they're hidden but still Available; housekeeping switches them off after 3 hours; and a suspended operator can't switch back on.
+- **Company directory:** the public and non-admins can't read or add listings; only published listings reach drivers (never new, hidden or removed); a listing can't be published without a phone; expired DC licenses drop off; a company that joined isn't listed twice; home-based listings return no pin and no address; at most 10 results and 25 km. Also checks the 25 km cap on `nearby_operators`.
 - **iPhone check-ins:** the public key can't make codes or read the codes table; codes are 64 random characters and only their hash is stored; a wrong code learns nothing; check-ins are refused while offline or suspended; a valid check-in puts the operator on the map; a second one within 15 seconds isn't written twice; impossible locations are rejected; a new code cancels the old one; deleting turns check-ins off; and nobody can delete someone else's code.
 - **Re-uploading a document** resets its verification.
 - **Storage:** an operator can upload to their own folder but not someone else's.
+
+### Import script tests
+
+File: `supabase/tests/import.test.mjs` (7 tests). The real download needs DC's server, so these feed the script's logic with sample rows shaped exactly like DC's data: only active tow businesses, one per business, the longest-running license, trade names, tidy capitals, no owner or agent names, correct quoting of names like O'Reilly. One test runs the generated SQL on a real (in-memory) database twice, a month apart: re-importing keeps a reviewer's phone number and decisions, refreshes license dates, and ends companies that disappeared from DC's list. `stub.mjs` builds that test database.
 
 ### Operator app logic tests
 
@@ -727,6 +816,11 @@ These cover the parts of the app that are pure logic. The screens and the real b
 | When to switch someone offline | After 3 hours with no position | After 30 minutes | Lets the next check-in bring a quiet operator straight back, without them reopening the app. |
 | Changing a database that's already live | A new migration file | Edit the first file | A database that already ran file 1 would never see an edit to it. |
 | Sharing logic between the two operator apps | Copies, plus a test that they match | One shared folder | Both build tools want files inside their own folder; linking across needs extra setup in both. The test makes copies safe. |
+| Filling the map at launch | A reviewed directory of licensed companies | Wait for operators; scrape Google | An empty map helps nobody. DC's license data is free, official and reusable; Google's terms forbid storing most of its data. |
+| Which companies to list | Only ones a person reviewed | Everything DC licenses | Many licensed companies only do private-lot towing, which would send drivers to the towers we're protecting them from. |
+| How directory listings look | Grey letters, outlined Call buttons | The same as live trucks | We can't confirm they're free or what they charge, so they must never look like a live, verified truck. |
+| Home-based companies | Area only, coarse distance, no pin | Show the registered address | A home address is private even when it's on a license. |
+| Search size | 25 km and 10 results | 100 km and 50 results | Drivers need the closest few; smaller answers make it harder to scrape every operator's position. |
 | Renewing a document | Add a new record | Replace the old one | Replacing would hide the operator until an admin checked the new copy. Adding keeps the old, still-valid one in effect meanwhile. |
 | Backend | Supabase | Firebase, a custom server | Free tier fits; real Postgres means real SQL, triggers and RLS. Firebase's free limit of 20,000 writes a day is too tight for location updates, and a custom server means hosting and patching something ourselves. |
 | Where rules live | In the database (RLS, triggers, RPCs) | In app code | Rules in the database protect every client, including ones we didn't write. Rules in app code protect only that app. |
@@ -765,6 +859,8 @@ Short definitions for explaining the project to someone else.
 - **Background task:** code the phone runs when the app isn't on screen, here to deliver new locations.
 - **Foreground service:** Android's rule that an app using location in the background must show a permanent notification, so people always know.
 - **Upsert:** insert a row if it doesn't exist, update it if it does.
+- **Open data:** information a government publishes for anyone to reuse, under a license that says how. DC's is Creative Commons Attribution: reuse it, and credit DC.
+- **Upsert on conflict:** "insert this row, or if one with the same key exists, update these columns instead." The import uses it with DC's customer number as the key.
 - **Migration:** a file of database changes, applied once and in order. The list of migration files is the history of how the database got its shape.
 - **Hash (SHA-256):** a one-way fingerprint of some text. The same text always gives the same fingerprint, but the fingerprint can't be turned back into the text.
 - **Shortcuts automation:** an iPhone feature that runs a shortcut when something happens, like an app opening or a Bluetooth device connecting. Since iOS 17 it can run without asking first.
@@ -779,23 +875,38 @@ Short definitions for explaining the project to someone else.
 In order, with the reason for the order:
 
 1. ~~Put the project on GitHub.~~ Done.
-2. **Create the Supabase project**, run both migrations, and connect the apps (see "Connect the real backend"). Everything from here needs it.
-3. **Deploy the two web apps on Cloudflare Pages**, so the operator web app has the `https://` address iPhones need for location.
-4. **Test with your dad:** he signs up on the operator web app, you approve him with SQL, you build and share the check-in shortcut, and he sets up the automations. Then check that his truck appears in the driver app when he opens Maps.
-5. **Add "Still available?" push reminders** for iPhone operators whose position is getting old.
-6. **Build the admin panel.** Replaces the SQL snippets for approving operators and handling reports.
-7. **Optional, for Android operators:** set up the Android emulator and test the Android app (see "The operator app").
-8. **Open the Google Play developer account early** ($25 once). New personal accounts must run a closed test with 12 testers for 14 straight days before publishing, so starting the clock early saves two weeks at the end.
-9. **Legal checks:** take the terms, privacy policy and accident flow to a free legal clinic, and ask MPD or DLCP how they treat driver-chosen tows in DC.
-10. **Recruit 10 to 20 DC operators,** starting with your dad's company. Android operators can also be the 12 Play Store testers.
-11. **Ask Catholic University or a nonprofit partner** about publishing the native iPhone app with Apple's fee waived.
-12. **Launch.**
+2. **Create the Supabase project**, run all three migrations, and connect the apps (see "Connect the real backend"). Everything from here needs it.
+3. **Fill the directory:** run the DC import and review the companies with your dad (see "Fill the company directory"). Then the driver app is useful from day one.
+4. **Deploy the two web apps on Cloudflare Pages**, so the operator web app has the `https://` address iPhones need for location.
+5. **Test with your dad:** he signs up on the operator web app, you approve him with SQL, you build and share the check-in shortcut, and he sets up the automations. Then check that his truck appears in the driver app when he opens Maps.
+6. **Add "Still available?" push reminders** for iPhone operators whose position is getting old.
+7. **Build the admin panel.** Replaces the SQL snippets for approving operators and handling reports, and gives directory review its own screen.
+8. **Optional, for Android operators:** set up the Android emulator and test the Android app (see "The operator app").
+9. **Open the Google Play developer account early** ($25 once). New personal accounts must run a closed test with 12 testers for 14 straight days before publishing, so starting the clock early saves two weeks at the end.
+10. **Legal checks:** take the terms, privacy policy, accident flow and the company directory (listing businesses that haven't joined) to a free legal clinic, and ask MPD or DLCP how they treat driver-chosen tows in DC.
+11. **Recruit 10 to 20 DC operators,** starting with your dad's company. Android operators can also be the 12 Play Store testers.
+12. **Ask Catholic University or a nonprofit partner** about publishing the native iPhone app with Apple's fee waived.
+13. **Rate-limit searches by address** if scraping ever becomes a problem (needs the caller's IP, best done in front of the database).
+14. **Launch.**
 
 ---
 
 ## Change log
 
 Every change gets an entry here: what changed, how it works, and why it was done that way. Newest first.
+
+### 2026-11-09: Company directory and safety limits
+
+- **What changed:**
+  - New migration `20261109010000_directory_and_hardening.sql`: the `listed_companies` table with a review status; the public `nearby_listed_companies()`; `nearby_operators()` capped at 25 km and 10 results (was 100 km and 50); and the two cleanup jobs scheduled with `pg_cron`.
+  - New script `supabase/scripts/import-dc-tow-companies.mjs`: imports DC's licensed tow businesses as hidden listings and refreshes their license status on re-runs.
+  - Driver app: a "Other licensed tow companies nearby" section with grey lettered pins, a details sheet, and a better screen when no live trucks are online. The default search radius is now 25 km to match the database. `VITE_OPERATOR_SIGNUP_URL` is a new optional setting for the "Join Tow Connect" link.
+  - Demo data: three fictional listings (in `seed.sql` and the driver app's demo mode), one marked as home-based.
+  - Tests: 15 new database checks (65 total), 7 import tests, and a 16-step browser click-through of the directory in demo mode and against a fake backend with no live trucks.
+- **How it works:** see "The company directory, explained."
+- **Why:** with few operators at launch, drivers still need someone to call. A reviewed list of licensed companies fills that gap, and every listing is a company we can invite to join. The search limits and scheduled cleanup were the two safety fixes planned before the first real test.
+- **Bug caught while testing:** home-based listings showed "about 1.1 mi away" when the company was really about 2.8 miles away, because their distance comes from a deliberately coarse grid point. They now show "Serves Takoma, DC" and no number.
+- **Not tested here:** the live download from DC Open Data, which this sandbox can't reach. Its logic is tested with sample rows in DC's format, and `--inspect` exists for checking the real data.
 
 ### 2026-11-09: iPhone operators (web app + auto check-in)
 

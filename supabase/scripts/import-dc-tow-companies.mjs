@@ -1,0 +1,181 @@
+// Downloads DC's licensed tow truck businesses from DC Open Data and writes SQL that adds them to
+// public.listed_companies as UNREVIEWED listings (drivers can't see them until a person publishes them).
+//
+// Usage, from the repo root on your own computer:
+//   node supabase/scripts/import-dc-tow-companies.mjs > dc-tow-companies.sql
+// Then paste dc-tow-companies.sql into the Supabase SQL Editor and run it.
+// Run it again any time (monthly is plenty) to refresh license status and end dates.
+//
+// Optional:  --inspect   prints which license types, activities and statuses DC's data contains
+//                        (use this if the import finds 0 companies; DC may have renamed a category)
+//
+// Data: "Basic Business Licenses", DC Department of Licensing and Consumer Protection,
+// published on opendata.dc.gov under Creative Commons Attribution 4.0 (credit DC when you show it).
+//
+// Privacy: we only request the business name, trade name, address, map position and license fields.
+// DC's data also has owner and agent names; we never download them.
+
+import { pathToFileURL } from 'node:url'
+
+const LAYER = 'https://maps2.dcgis.dc.gov/dcgis/rest/services/FEEDS/DCRA/MapServer/0/query'
+const FIELDS = [
+  'CUSTOMERNUMBER',
+  'LICENSESTATUS',
+  'LICENSETYPE',
+  'LICENSEENDDATE',
+  'BUSINESSACTIVITY',
+  'CATEGORYSERVICETYPE',
+  'ENTITYNAME',
+  'ENTITYTRADENAME',
+  'PREMISEADDRESS',
+  'LATITUDE',
+  'LONGITUDE',
+]
+// DC's category for tow companies is "Tow Truck Business". We match it in any of the three fields
+// that describe what a license is for, because which field holds it isn't documented.
+const WHERE =
+  "UPPER(BUSINESSACTIVITY) LIKE '%TOW TRUCK BUSINESS%' OR UPPER(CATEGORYSERVICETYPE) LIKE '%TOW TRUCK BUSINESS%' OR UPPER(LICENSETYPE) LIKE '%TOW TRUCK BUSINESS%'"
+const PAGE = 1000 // the server returns at most 2,000 per request; we ask for less and page through
+
+// ---------- Pure functions (tested in supabase/tests/import.test.mjs) ----------
+
+const isTowBusiness = (a) =>
+  [a.BUSINESSACTIVITY, a.CATEGORYSERVICETYPE, a.LICENSETYPE].some((v) => /tow truck business/i.test(v ?? ''))
+
+// ArcGIS sends dates as milliseconds since 1970. We keep only the calendar date, in UTC.
+export function toDate(ms) {
+  if (ms == null || Number.isNaN(Number(ms))) return null
+  return new Date(Number(ms)).toISOString().slice(0, 10)
+}
+
+// "SMITH TOWING LLC" -> "Smith Towing LLC". DC stores names in capitals.
+export function tidyName(raw) {
+  const keepUpper = new Set(['LLC', 'INC', 'DC', 'NE', 'NW', 'SE', 'SW', 'USA', 'LTD', 'CO'])
+  return String(raw ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((w) => (keepUpper.has(w.replace(/[.,]/g, '').toUpperCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+    .join(' ')
+}
+
+// One listing per business. DC has several rows per business (old licenses, several activities);
+// we keep the active tow-business license that runs the longest.
+export function pickCompanies(features) {
+  const best = new Map()
+  for (const { attributes: a } of features) {
+    if (!isTowBusiness(a)) continue
+    if (String(a.LICENSESTATUS ?? '').trim().toLowerCase() !== 'active') continue
+    if (!a.CUSTOMERNUMBER) continue
+    const prev = best.get(a.CUSTOMERNUMBER)
+    if (!prev || (a.LICENSEENDDATE ?? 0) > (prev.LICENSEENDDATE ?? 0)) best.set(a.CUSTOMERNUMBER, a)
+  }
+  return [...best.values()]
+    .map((a) => ({
+      dc_customer_number: String(a.CUSTOMERNUMBER),
+      name: tidyName(a.ENTITYTRADENAME || a.ENTITYNAME),
+      address: a.PREMISEADDRESS ? String(a.PREMISEADDRESS).trim() : null,
+      lat: typeof a.LATITUDE === 'number' ? a.LATITUDE : null,
+      lng: typeof a.LONGITUDE === 'number' ? a.LONGITUDE : null,
+      license_status: String(a.LICENSESTATUS).trim(),
+      license_end_date: toDate(a.LICENSEENDDATE),
+    }))
+    .filter((c) => c.name.length >= 2)
+    .sort((x, y) => x.name.localeCompare(y.name))
+}
+
+// SQL text literal: 'it''s' style escaping, or NULL.
+export const lit = (v) => (v == null ? 'null' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`)
+
+// New companies arrive as review_status 'new' (hidden from drivers). For companies already in the
+// table we refresh ONLY the facts DC owns (license status and dates, address, position) and never
+// touch what a person reviewed: phone number, review status, show_exact_location, notes.
+export function toSql(companies, today = new Date().toISOString().slice(0, 10)) {
+  if (!companies.length) return '-- No active DC tow truck businesses found. Nothing to import.\n'
+  const rows = companies
+    .map(
+      (c) =>
+        `  (${lit(c.name)}, ${lit(c.address)}, ${lit(c.lat)}, ${lit(c.lng)}, 'DC', 'dc_license', ${lit(c.dc_customer_number)}, ${lit(c.license_status)}, ${lit(c.license_end_date)}, ${lit(today)}, 'new')`,
+    )
+    .join(',\n')
+  return `-- Generated by supabase/scripts/import-dc-tow-companies.mjs on ${today}
+-- Source: DC DLCP Basic Business Licenses (opendata.dc.gov), CC BY 4.0.
+-- ${companies.length} active DC tow truck businesses. New ones are added as 'new' (not visible to drivers).
+insert into public.listed_companies
+  (name, address, lat, lng, jurisdiction, source, dc_customer_number, license_status, license_end_date, last_checked_on, review_status)
+values
+${rows}
+on conflict (dc_customer_number) do update set
+  license_status   = excluded.license_status,
+  license_end_date = excluded.license_end_date,
+  address          = excluded.address,
+  lat              = excluded.lat,
+  lng              = excluded.lng,
+  last_checked_on  = excluded.last_checked_on;
+
+-- DC tow businesses that were in an earlier import but are no longer active are marked as checked
+-- today with an ended license, so they drop off the driver app automatically.
+update public.listed_companies
+set license_status = 'Not active in DC data', license_end_date = least(coalesce(license_end_date, ${lit(today)}::date), ${lit(today)}::date - 1), last_checked_on = ${lit(today)}
+where source = 'dc_license'
+  and dc_customer_number not in (${companies.map((c) => lit(c.dc_customer_number)).join(', ')});
+`
+}
+
+// ---------- Network (only when run as a script) ----------
+
+async function fetchAll(where, fields) {
+  const features = []
+  for (let offset = 0; ; offset += PAGE) {
+    const params = new URLSearchParams({
+      where,
+      outFields: fields.join(','),
+      returnGeometry: 'false',
+      f: 'json',
+      resultOffset: String(offset),
+      resultRecordCount: String(PAGE),
+      orderByFields: 'OBJECTID',
+    })
+    const res = await fetch(`${LAYER}?${params}`)
+    if (!res.ok) throw new Error(`DC Open Data answered ${res.status} ${res.statusText}`)
+    const body = await res.json()
+    if (body.error) throw new Error(`DC Open Data error: ${body.error.message} ${JSON.stringify(body.error.details ?? '')}`)
+    features.push(...(body.features ?? []))
+    if (!body.exceededTransferLimit && (body.features ?? []).length < PAGE) break
+  }
+  return features
+}
+
+async function main() {
+  if (process.argv.includes('--inspect')) {
+    const features = await fetchAll("UPPER(BUSINESSACTIVITY) LIKE '%TOW%' OR UPPER(CATEGORYSERVICETYPE) LIKE '%TOW%' OR UPPER(LICENSETYPE) LIKE '%TOW%'", ['LICENSETYPE', 'BUSINESSACTIVITY', 'CATEGORYSERVICETYPE', 'LICENSESTATUS'])
+    const count = (key) => {
+      const m = new Map()
+      for (const { attributes: a } of features) m.set(a[key], (m.get(a[key]) ?? 0) + 1)
+      return [...m.entries()].sort((x, y) => y[1] - x[1])
+    }
+    console.error(`${features.length} rows mention towing.`)
+    for (const key of ['LICENSETYPE', 'BUSINESSACTIVITY', 'CATEGORYSERVICETYPE', 'LICENSESTATUS']) {
+      console.error(`\n${key}:`)
+      for (const [v, n] of count(key)) console.error(`  ${n}\t${v}`)
+    }
+    return
+  }
+
+  const features = await fetchAll(WHERE, FIELDS)
+  const companies = pickCompanies(features)
+  // Progress goes to stderr, so `> file.sql` captures only the SQL.
+  console.error(`Downloaded ${features.length} license rows; ${companies.length} active tow truck businesses.`)
+  if (!companies.length) console.error('Found none. Run again with --inspect to see what DC calls these licenses now.')
+  process.stdout.write(toSql(companies))
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main().catch((err) => {
+    console.error(`Import failed: ${err.message}`)
+    if (/fetch failed/i.test(err.message)) {
+      console.error('Could not reach DC Open Data (maps2.dcgis.dc.gov). Check your internet connection and try again.')
+    }
+    process.exit(1)
+  })
+}

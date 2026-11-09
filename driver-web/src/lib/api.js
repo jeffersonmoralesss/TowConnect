@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { DEMO_OPERATORS } from './demoData.js'
+import { DEMO_LISTINGS, DEMO_OPERATORS } from './demoData.js'
 import { distanceKm, roundCoord } from './geo.js'
 
 // Every network call in the driver app goes through this file. Components never talk to Supabase
@@ -36,12 +36,48 @@ function demoNearby({ lat, lng, radiusKm }) {
 }
 
 /** Available, verified operators near a point. Positions are rounded (about half a mile). */
-export async function fetchNearbyOperators({ lat, lng, radiusKm = 40 }) {
+// The database caps the radius at 25 km (about 15 miles) and returns at most 10 trucks.
+export async function fetchNearbyOperators({ lat, lng, radiusKm = 25 }) {
   if (isDemo) {
     await wait(350)
     return demoNearby({ lat, lng, radiusKm })
   }
   const { data, error } = await supabase.rpc('nearby_operators', {
+    p_lat: lat,
+    p_lng: lng,
+    p_radius_km: radiusKm,
+  })
+  if (error) throw new Error(error.message)
+  return data ?? []
+}
+
+// Mirrors nearby_listed_companies(): home-based listings get no pin or address, and their distance
+// is measured from a coarse grid point (0.05 degrees, about 3 miles).
+function demoListings({ lat, lng, radiusKm }) {
+  const coarse = (v) => Math.round(v * 20) / 20
+  return DEMO_LISTINGS.map(({ lat: lLat, lng: lLng, show_exact_location: exact, address, ...rest }) => {
+    const mLat = exact ? lLat : coarse(lLat)
+    const mLng = exact ? lLng : coarse(lLng)
+    return {
+      ...rest,
+      address: exact ? address : null,
+      pin_lat: exact ? lLat : null,
+      pin_lng: exact ? lLng : null,
+      distance_km: Math.round(distanceKm(lat, lng, mLat, mLng) * 10) / 10,
+      is_demo: true,
+    }
+  })
+    .filter((c) => c.distance_km <= radiusKm)
+    .sort((a, b) => a.distance_km - b.distance_km)
+}
+
+/** Licensed tow companies that are not on Tow Connect, reviewed by a person before they appear. */
+export async function fetchNearbyListings({ lat, lng, radiusKm = 25 }) {
+  if (isDemo) {
+    await wait(250)
+    return demoListings({ lat, lng, radiusKm })
+  }
+  const { data, error } = await supabase.rpc('nearby_listed_companies', {
     p_lat: lat,
     p_lng: lng,
     p_radius_km: radiusKm,

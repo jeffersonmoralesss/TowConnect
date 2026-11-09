@@ -198,5 +198,56 @@ const code3 = (await as('authenticated', u3, `select public.create_checkin_code(
 r = await checkin(code3)
 ok(r.ok === false && /approved/.test(r.message), 'a suspended operator cannot check in')
 
+// ---------- Company directory + hardening (migration 20261109010000) ----------
+ok(await fails(() => as('anon', null, `select * from public.listed_companies`)), 'the public key cannot read the directory table')
+const nonAdminView = await as('authenticated', u4, `select * from public.listed_companies`)
+ok(nonAdminView.rows.length === 0, 'a signed-in non-admin cannot see directory rows')
+ok(await fails(() => as('authenticated', u4, `insert into public.listed_companies (name, source) values ('Sneaky Tow', 'manual')`)), 'a non-admin cannot add listings')
+
+const listings = async (lat = 38.92, lng = -77.0, radius = 25, limit = 10) =>
+  (await as('anon', null, `select * from public.nearby_listed_companies($1, $2, $3, $4)`, [lat, lng, radius, limit])).rows
+let L = await listings()
+ok(L.length === 3 && L.every((x) => x.is_demo), 'the 3 published demo listings show near DC')
+ok(L[0].distance_km <= L.at(-1).distance_km, 'listings are sorted closest first')
+const home = L.find((x) => x.name.startsWith('Takoma'))
+ok(home && home.pin_lat === null && home.address === null && home.area_label === 'Takoma, DC', 'home-based listing: no pin, no address, only the area')
+const yard = L.find((x) => x.name.startsWith('Eastern'))
+ok(yard && yard.pin_lat === 38.9196 && yard.address !== null, 'business-yard listing shows its pin and address')
+
+// The admin adds listings in different review states
+const addListing = async (fields) => {
+  const cols = Object.keys(fields)
+  const vals = Object.values(fields)
+  const sql = `insert into public.listed_companies (${cols.join(', ')}) values (${cols.map((_, i) => '$' + (i + 1)).join(', ')}) returning id`
+  return (await as('authenticated', u2, sql, vals)).rows[0].id
+}
+const base = { phone: '(202) 555-0180', lat: 38.921, lng: -77.001, source: 'manual' }
+await addListing({ ...base, name: 'New Unreviewed Tow', review_status: 'new' })
+await addListing({ ...base, name: 'Private Lot Enforcement', review_status: 'hidden' })
+await addListing({ ...base, name: 'Asked To Be Removed', review_status: 'removed' })
+L = await listings()
+ok(!L.some((x) => /Unreviewed|Private Lot|Removed/.test(x.name)), 'new, hidden and removed listings never reach drivers')
+ok(await fails(() => addListing({ name: 'No Phone Tow', lat: 38.92, lng: -77.0, source: 'manual', review_status: 'published' })), 'a listing cannot be published without a phone number')
+
+await addListing({ ...base, name: 'Expired DC License Tow', source: 'dc_license', dc_customer_number: 'X1', license_end_date: '2020-01-01', review_status: 'published' })
+await addListing({ ...base, name: 'Valid DC License Tow', source: 'dc_license', dc_customer_number: 'X2', license_end_date: '2099-01-01', review_status: 'published' })
+L = await listings()
+ok(!L.some((x) => x.name === 'Expired DC License Tow'), 'a listing whose DC license has ended drops off automatically')
+ok(L.some((x) => x.name === 'Valid DC License Tow'), 'a listing with a current DC license shows')
+
+const joined = await addListing({ ...base, name: 'Already Joined Tow', review_status: 'published' })
+await as('authenticated', u2, `update public.listed_companies set operator_id = $1 where id = $2`, [op3, joined])
+L = await listings()
+ok(!L.some((x) => x.name === 'Already Joined Tow'), 'a company that joined Tow Connect is not listed twice')
+
+for (let i = 0; i < 12; i++) await addListing({ ...base, name: `Bulk Tow ${i}`, review_status: 'published', lat: 38.92 + i * 0.001 })
+L = await listings(38.92, -77.0, 25, 50)
+ok(L.length === 10, `directory returns at most 10 results even when asked for 50 (got ${L.length})`)
+L = await listings(39.22, -77.0, 100, 10)
+ok(L.length === 0, 'directory search radius is capped at 25 km (nothing returned from ~33 km away)')
+
+const farOps = await as('anon', null, `select * from public.nearby_operators(39.2, -77.0, 100, 50)`)
+ok(farOps.rows.length === 0, 'operator search radius is capped at 25 km (asking for 100 km from ~30 km away finds nobody)')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

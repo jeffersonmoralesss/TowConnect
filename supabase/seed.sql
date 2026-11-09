@@ -35,3 +35,13 @@ trucks as (
 insert into public.operator_positions (operator_id, lat, lng, accuracy_m)
 select ops.id, demo.lat, demo.lng, 15
 from ops join demo using (company_name);
+
+-- Three made-up directory listings (companies "not on Tow Connect"), also demo-only.
+-- One is marked as home-based, so it shows an area instead of a pin.
+-- Remove before launch:  delete from public.listed_companies where is_demo;
+insert into public.listed_companies
+  (name, phone, address, area_label, lat, lng, show_exact_location, services, source, license_status, license_end_date, review_status, is_demo)
+values
+  ('Eastern Avenue Towing (sample)', '(202) 555-0171', '1200 Sample St NE, Washington, DC', null, 38.9196, -76.9842, true,  array['Towing','Jump start'], 'manual', null, null, 'published', true),
+  ('Navy Yard Wrecker Service (sample)', '(202) 555-0174', '50 Example Ave SE, Washington, DC', null, 38.8760, -77.0020, true,  array['Towing','Accident recovery'], 'manual', null, null, 'published', true),
+  ('Takoma Family Towing (sample)', '(202) 555-0177', null, 'Takoma, DC', 38.9710, -77.0180, false, array['Towing','Lockout'], 'manual', null, null, 'published', true);
