@@ -44,7 +44,11 @@ export async function startEnroll() {
   for (const f of data.all.filter((x) => x.status === 'unverified')) {
     await supabase.auth.mfa.unenroll({ factorId: f.id })
   }
-  const enrolled = unwrap(await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Tow Connect admin' }))
+  // issuer is the name the authenticator app shows above the code. Without it, Supabase uses the
+  // project's Site URL, and refuses with "site url is improperly formatted" if that setting is off.
+  const enrolled = unwrap(
+    await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Tow Connect admin', issuer: 'Tow Connect' }),
+  )  
   return { factorId: enrolled.id, qrCode: enrolled.totp.qr_code, secret: enrolled.totp.secret }
 }
 
